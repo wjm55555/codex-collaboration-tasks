@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 GITHUB_REPO = "wjm55555/codex-collaboration-tasks"
 RELEASE_ASSET = "collaboration-tasks-macos.zip"
 CHECK_INTERVAL = 3600
@@ -82,13 +82,32 @@ def github_open(request, timeout):
     return urllib.request.urlopen(request, timeout=timeout)
 
 
-def github_version(root):
+def write_json(path, data):
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as temp:
+        json.dump(data, temp)
+    Path(temp.name).replace(path)
+
+
+def auto_enabled(root):
+    config = root / "update-preferences.json"
+    return (
+        config.is_file() and json.loads(config.read_text()).get("autoInstall") is True
+    )
+
+
+def update_status(root, *, force=False):
+    cache = root / "github-check.json"
+    info = json.loads(cache.read_text()) if cache.is_file() else {"status": "idle"}
     if not GITHUB_REPO:
-        return None
-    cache = root / "github-release"
-    checked = root / "github-checked"
-    if not checked.exists() or time.time() - checked.stat().st_mtime >= CHECK_INTERVAL:
-        checked.touch()
+        return {"status": "disabled", "autoInstall": auto_enabled(root)}
+    now = int(time.time())
+    checking = info["status"] == "checking"
+    running = checking and now - info["startedAt"] < 20
+    check_again = 120 if info["status"] == "error" else CHECK_INTERVAL
+    due = now - info.get("checkedAt", 0) >= check_again
+    if not running and (force or due or checking):
+        info.update(status="checking", startedAt=now)
+        write_json(cache, info)
 
         def check():
             url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -99,23 +118,38 @@ def github_version(root):
                     "User-Agent": "Collaboration-Tasks",
                 },
             )
+            result = {**info, "checkedAt": int(time.time())}
             try:
                 with github_open(request, timeout=5) as response:
                     release = json.loads(response.read(128 * 1024))
                 version = release["tag_name"].removeprefix("v")
                 version_tuple(version)
                 assets = {entry["name"] for entry in release["assets"]}
-                if {RELEASE_ASSET, RELEASE_ASSET + ".sig"} <= assets:
-                    with tempfile.NamedTemporaryFile(
-                        "w", dir=root, delete=False
-                    ) as temp:
-                        temp.write(version)
-                    Path(temp.name).replace(cache)
-            except (KeyError, OSError, TypeError, ValueError):
-                return  # Keep the last known release if GitHub can't be reached.
+                if not {RELEASE_ASSET, RELEASE_ASSET + ".sig"} <= assets:
+                    raise ValueError("No signed package")
+                result.update(status="ok", version=version)
+            except (AttributeError, KeyError, OSError, TypeError, ValueError):
+                result["status"] = "error"
+            write_json(cache, result)
 
         threading.Thread(target=check, daemon=True).start()
-    return cache.read_text() if cache.is_file() else None
+    return {**info, "autoInstall": auto_enabled(root)}
+
+
+def github_version(root):
+    return update_status(root).get("version")
+
+
+def receiver_busy(root):
+    if not (root / "host.json").is_file():
+        return False
+    with sqlite3.connect((root / "tasks.sqlite").as_uri() + "?mode=ro", uri=True) as db:
+        return (
+            db.execute(
+                "SELECT 1 FROM tasks WHERE status IN ('queued','dispatching','running','desktop_queued','desktop_running') LIMIT 1"
+            ).fetchone()
+            is not None
+        )
 
 
 def github_package(root):
@@ -189,15 +223,8 @@ def apply_update(root, response):
             root.parent if root.name == "lan-task-center" else Path.home() / ".codex"
         )
         receiver = (root / "host.json").is_file()
-        if receiver:
-            with sqlite3.connect(
-                (root / "tasks.sqlite").as_uri() + "?mode=ro", uri=True
-            ) as db:
-                busy = db.execute(
-                    "SELECT 1 FROM tasks WHERE status IN ('queued','dispatching','running','desktop_queued','desktop_running') LIMIT 1"
-                ).fetchone()
-            if busy:
-                raise ValueError("还有任务在执行，请完成后再更新接收端")
+        if receiver_busy(root):
+            return {"waiting": True}
         try:
             install = subprocess.run(
                 [

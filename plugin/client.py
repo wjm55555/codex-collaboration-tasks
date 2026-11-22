@@ -27,10 +27,12 @@ FILES = {"type": "array", "items": STRING, "maxItems": 8}
 ACTIONS = {
     "state": ("读取我的任务", {}),
     "sync_state": ("仅拉取已变化的任务列表", {"revision": STRING}),
+    "check_updates": ("立即检查协作任务更新", {}),
+    "set_auto_update": ("设置自动安装协作任务更新", {"enabled": {"type": "boolean"}}),
     "devices": ("查看已授权的发布设备", {}),
     "apply_update": (
         "安装协作任务更新",
-        {"source": {"enum": ["lan", "github"]}},
+        {"source": {"enum": ["lan", "github"]}, "automatic": {"type": "boolean"}},
     ),
     "discover_lan": ("搜索同一 Wi-Fi 上的接收方", {}),
     "request_lan": ("向接收方请求连接", {"endpoint": STRING, "pin": STRING}),
@@ -96,14 +98,27 @@ def local_action(action, args):
     import shutil
     import subprocess
 
+    if action in ("check_updates", "set_auto_update"):
+        from release import update_status, write_json
+
+        if action == "set_auto_update":
+            enabled = args.get("enabled")
+            if type(enabled) is not bool:
+                raise ValueError("请选择是否自动安装更新")
+            write_json(ROOT / "update-preferences.json", {"autoInstall": enabled})
+        return update_status(ROOT, force=action == "check_updates")
     if action == "apply_update":
-        from release import apply_update, github_package
+        from release import apply_update, auto_enabled, github_package, receiver_busy
 
         source = args.get("source")
         if source not in ("lan", "github"):
             raise ValueError("请选择更新来源")
         if source == "lan" and (ROOT / "host.json").is_file():
             raise ValueError("接收端请通过 GitHub 或最新安装包更新")
+        if args.get("automatic") is True and not auto_enabled(ROOT):
+            raise ValueError("自动安装更新未开启")
+        if receiver_busy(ROOT):
+            return {"waiting": True}
         update = (
             github_package(ROOT) if source == "github" else api("update_package", {})
         )
@@ -115,20 +130,19 @@ def local_action(action, args):
     if action == "request_lan":
         return request_lan(args)
     if action == "sync_state":
-        from release import github_version
+        from release import update_status
 
-        latest = github_version(ROOT)
+        updates = update_status(ROOT)
         if not (ROOT / "connection.json").is_file():
             state = {"connection": "unpaired"}
         else:
             try:
                 state = api(action, args)
             except ValueError as exc:
-                if not latest:
-                    raise
                 state = {"syncError": str(exc)}
-        if latest:
-            state["githubVersion"] = latest
+        state["updates"] = updates
+        if updates.get("version"):
+            state["githubVersion"] = updates["version"]
         return state
     stage = ROOT / "selections"
     if action == "discard_file":
@@ -387,7 +401,7 @@ def rpc(method, params):
             schema = {
                 "type": "object",
                 "properties": fields,
-                "required": [k for k in fields if k != "files"],
+                "required": [k for k in fields if k not in ("files", "automatic")],
                 "additionalProperties": False,
             }
             tools.append(
