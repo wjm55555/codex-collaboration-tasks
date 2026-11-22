@@ -24,9 +24,10 @@ META = {
 LIMIT = 16 * 1024 * 1024
 STRING = {"type": "string"}
 FILES = {"type": "array", "items": STRING, "maxItems": 8}
+PEER_ACTIONS = ("state", "sync_state", "publish", "reply", "download", "update_package")
 ACTIONS = {
-    "state": ("读取我的任务", {}),
-    "sync_state": ("仅拉取已变化的任务列表", {"revision": STRING}),
+    "state": ("读取我的任务，可指定接收设备", {"peer": STRING}),
+    "sync_state": ("仅拉取已变化的任务列表", {"revision": STRING, "peer": STRING}),
     "check_updates": ("立即检查协作任务更新", {}),
     "set_auto_update": ("设置自动安装协作任务更新", {"enabled": {"type": "boolean"}}),
     "devices": ("查看已授权的发布设备", {}),
@@ -45,7 +46,10 @@ ACTIONS = {
         {"device": STRING, "mode": {"enum": ["inherit", "manual", "auto"]}},
     ),
     "revoke_device": ("撤销一台设备的发布和查看权限", {"device": STRING}),
-    "publish": ("发布任务，可附上已选择的文件", {"text": STRING, "files": FILES}),
+    "publish": (
+        "发布任务，可指定接收设备并附上文件",
+        {"text": STRING, "files": FILES, "peer": STRING},
+    ),
     "chats": ("搜索本机可派送的 Codex 对话", {"query": STRING}),
     "set_mode": ("设置新任务的接单方式", {"mode": {"enum": ["manual", "auto"]}}),
     "accept": (
@@ -68,14 +72,14 @@ ACTIONS = {
     "ask": ("向发布者询问完成这项任务所需的信息", {"id": STRING, "text": STRING}),
     "reply": (
         "向本任务的接收方补充说明或附件",
-        {"id": STRING, "text": STRING, "files": FILES},
+        {"id": STRING, "text": STRING, "files": FILES, "peer": STRING},
     ),
     "pick_files": ("从这台 Mac 选择附件", {}),
     "stage_upload": ("添加拖入或粘贴的附件", {"name": STRING, "data": STRING}),
     "discard_file": ("移除尚未发送的附件", {"key": STRING}),
     "save_file": (
         "将任务附件另存到这台 Mac",
-        {"id": STRING, "slot": {"type": "integer"}},
+        {"id": STRING, "slot": {"type": "integer"}, "peer": STRING},
     ),
 }
 
@@ -94,10 +98,26 @@ def native_file(script, *args):
     return p.stdout.rstrip("\n")
 
 
+def peers(root):
+    from lan import fingerprint
+
+    links = root / "peers.json"
+    if links.is_file():
+        return json.loads(links.read_text())
+    legacy = root / "connection.json"
+    if not (root / "host.json").is_file() and legacy.is_file():
+        config = json.loads(legacy.read_text())
+        name = urlsplit(config["url"]).hostname.removesuffix(".local")
+        return {fingerprint(config["ca"]): {"name": name, **config}}
+    return {}
+
+
 def local_action(action, args):
     import shutil
     import subprocess
 
+    if not isinstance(args.get("peer", ""), str):
+        raise ValueError("请选择接收设备")
     if action in ("check_updates", "set_auto_update"):
         from release import update_status, write_json
 
@@ -124,25 +144,39 @@ def local_action(action, args):
         )
         return apply_update(ROOT, update)
     if action == "discover_lan":
-        from lan import discover
+        from lan import discover, fingerprint
 
-        return discover()
+        found = discover()
+        ca = ROOT / "cert.pem"
+        if ca.is_file():
+            own_pin = fingerprint(ca.read_text())
+            found["devices"] = [d for d in found["devices"] if d["pin"] != own_pin]
+        return found
     if action == "request_lan":
         return request_lan(args)
-    if action == "sync_state":
+    if action in ("state", "sync_state"):
         from release import update_status
 
-        updates = update_status(ROOT)
-        if not (ROOT / "connection.json").is_file():
-            state = {"connection": "unpaired"}
+        receiver = (ROOT / "host.json").is_file()
+        links = peers(ROOT)
+        if args.get("peer") == "outbox" or not receiver and not links:
+            state = {"owner": False, "tasks": [], "draftScope": "outbox"}
         else:
             try:
-                state = api(action, args)
+                state = api(action, args, links=links)
             except ValueError as exc:
+                if action == "state":
+                    raise
                 state = {"syncError": str(exc)}
-        state["updates"] = updates
-        if updates.get("version"):
-            state["githubVersion"] = updates["version"]
+        state["receiver"] = receiver
+        state["peers"] = [
+            {"id": key, "name": value["name"]} for key, value in links.items()
+        ]
+        if action == "sync_state":
+            updates = update_status(ROOT)
+            state["updates"] = updates
+            if updates.get("version"):
+                state["githubVersion"] = updates["version"]
         return state
     stage = ROOT / "selections"
     if action == "discard_file":
@@ -241,12 +275,9 @@ def request_lan(args):
     import http.client
     import ssl
     import subprocess
-    import tempfile
+    from lan import PIN, fingerprint, verified_authority
+    from release import write_json
 
-    from lan import PIN, verified_authority
-
-    if (ROOT / "host.json").is_file():
-        raise ValueError("当前协作任务已安装为接收端")
     endpoint, pin = args.get("endpoint"), args.get("pin")
     if (
         not isinstance(endpoint, str)
@@ -258,7 +289,19 @@ def request_lan(args):
         or not re.fullmatch(PIN, pin)
     ):
         raise ValueError("请选择刚搜索到的接收端")
+    own_ca = ROOT / "cert.pem"
+    if own_ca.is_file() and fingerprint(own_ca.read_text()) == pin:
+        raise ValueError("请选择另一台接收设备")
     target = urlsplit("//" + endpoint)
+    links = peers(ROOT)
+    if pin in links:
+        try:
+            state = api("sync_state", {"peer": pin}, links=links)
+        except ValueError as exc:
+            if "授权已失效" not in str(exc):
+                raise
+        else:
+            return {"connection": state.get("connection", "ready"), "peer": pin}
     name = (
         subprocess.run(
             ["/usr/sbin/scutil", "--get", "ComputerName"],
@@ -287,20 +330,32 @@ def request_lan(args):
     finally:
         conn.close()
     ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=ROOT, delete=False) as saved:
-        json.dump({"url": "https://" + endpoint, "ca": ca, "token": token}, saved)
-    Path(saved.name).replace(ROOT / "connection.json")
-    return {"connection": "pending"}
+    links[pin] = {
+        "name": f"{target.hostname.removesuffix('.local')}:{target.port}"
+        if target.port != 43871
+        else target.hostname.removesuffix(".local"),
+        "url": "https://" + endpoint,
+        "ca": ca,
+        "token": token,
+    }
+    write_json(ROOT / "peers.json", links)
+    return {"connection": "pending", "peer": pin}
 
 
-def api(action, args):
+def api(action, args, *, links=None):
     import http.client
     import ssl
 
-    saved_connection = ROOT / "connection.json"
-    if not saved_connection.is_file():
-        raise ValueError("请先在协作任务连接同一 Wi-Fi 上的接收方。")
-    config = json.loads(saved_connection.read_text())
+    peer = args.get("peer", "")
+    if peer or not (ROOT / "host.json").is_file():
+        if action not in PEER_ACTIONS:
+            raise ValueError("这个操作需要在本机收件箱执行")
+        links = peers(ROOT) if links is None else links
+        config = links.get(peer) if peer else next(iter(links.values()), None)
+        if config is None:
+            raise ValueError("请先在协作任务连接同一 Wi-Fi 上的接收方。")
+    else:
+        config = json.loads((ROOT / "connection.json").read_text())
     target = urlsplit(config["url"])
     context = ssl.create_default_context(cadata=config["ca"])
     conn = http.client.HTTPSConnection(
@@ -323,7 +378,7 @@ def api(action, args):
         conn.request(
             "POST",
             "/api/" + action,
-            json.dumps(args).encode(),
+            json.dumps({k: v for k, v in args.items() if k != "peer"}).encode(),
             {
                 "Authorization": "Bearer " + config["token"],
                 "Content-Type": "application/json",
@@ -337,7 +392,7 @@ def api(action, args):
         )
         if res.status == 409 and action == "sync_state":
             return data
-        if res.status == 403 and action in ("state", "sync_state"):
+        if res.status == 403:
             raise ValueError("连接申请未获批准或授权已失效，请重新连接。")
         if res.status != 200:
             raise ValueError(data.get("error", "操作失败"))
@@ -401,7 +456,9 @@ def rpc(method, params):
             schema = {
                 "type": "object",
                 "properties": fields,
-                "required": [k for k in fields if k not in ("files", "automatic")],
+                "required": [
+                    k for k in fields if k not in ("files", "automatic", "peer")
+                ],
                 "additionalProperties": False,
             }
             tools.append(

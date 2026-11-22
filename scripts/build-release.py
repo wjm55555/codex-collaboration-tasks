@@ -20,7 +20,7 @@ files = [
     *sorted(p for p in (root / "plugin").rglob("*") if p.is_file()
             and p.name != ".DS_Store" and "__pycache__" not in p.parts),
 ]
-assert not any(p.name in ("connection.json", "host.json", "receiver.json")
+assert not any(p.name in ("connection.json", "peers.json", "host.json", "receiver.json")
                or p.suffix in (".pem", ".key", ".sqlite") for p in files)
 out = root / "dist"
 out.mkdir(exist_ok=True)

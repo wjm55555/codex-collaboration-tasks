@@ -27,10 +27,10 @@
       }
       * { box-sizing: border-box; }
       body, h1, h2, h3, p { margin: 0; }
-      button, input, textarea { font: inherit; color: inherit; }
+      button, input, select, textarea { font: inherit; color: inherit; }
       button { cursor: pointer; border: 0; background: none; }
       button:disabled { cursor: default; opacity: .45; }
-      :is(button, a, summary, input, textarea):focus-visible {
+      :is(button, a, summary, input, select, textarea):focus-visible {
         outline: 2px solid var(--sub);
         outline-offset: 2px;
       }
@@ -150,9 +150,6 @@
       dialog .device-list { display: grid; gap: 6px; margin: 12px 0; }
       dialog .device-row { padding: 8px 0; border-bottom: 1px solid var(--stroke); }
       dialog .device-row strong { flex: 1; overflow-wrap: anywhere; }
-      .lan-connect { margin: 24px auto; padding: 0 16px; width: min(100%, 480px); }
-      .lan-connect .device-row { gap: 8px; align-items: center; }
-      .lan-connect .device-row strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
       dialog input, dialog select {
         min-height: 32px;
         min-width: 0;
@@ -184,13 +181,13 @@
         gap: 6px;
         margin: 0 6px 12px 9px;
       }
-      .railhead h2 {
-        margin-right: auto;
-        color: var(--sub);
-        font-size: 13px;
-        font-weight: 590;
-        white-space: nowrap;
-      }
+      .mailboxes { display: flex; align-items: center; gap: 2px; }
+      .mailboxes [aria-pressed="true"] { background: var(--selected); color: var(--ink); font-weight: 600; }
+      .outbox-peers { display: flex; gap: 5px; margin: 0 6px 12px 9px; }
+      .peer-select { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      .outbox-peers .peer-select { flex: 1; }
+      .recipient { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 18px 0; }
+      .recipient .peer-select { max-width: min(100%, 32ch); }
       #refresh, .filter {
         display: inline-flex;
         align-items: center;
@@ -457,14 +454,15 @@
         .frame[data-screen="list"] .content, .frame[data-screen="detail"] aside { display: none; }
         .back { display: inline-flex; min-height: 29px; margin: -6px 0 13px -6px; padding: 4px 7px; font-size: 12px; }
         .sheet h2 { font-size: 21px; }
-        .railhead h2 { font-size: 14px; }
         .item { padding: 10px 12px; }
       }
-      @media (max-width: 375px) {
-        .top { gap: 5px; padding-inline: 10px; }
+      @media (max-width: 460px) {
+        .top { flex-wrap: wrap; gap: 5px; padding-inline: 10px; }
         .mark { display: none; }
         .top h1 { font-size: 15px; }
         .top .soft, .top .solid { padding-inline: 7px; font-size: 12px; }
+        .top #mode svg:first-child, .top #new [data-icon] { display: none; }
+        .top #new { margin-inline-start: auto; }
         .content { padding-inline: 14px; }
       }
     </style>
@@ -501,16 +499,13 @@
         <button class="soft" id="retry">重新连接</button>
       </div>
       <p class="error errorbar" role="alert" id="alert"></p>
-      <section class="lan-connect" id="lanConnect" aria-labelledby="lanHeading" hidden>
-        <h2 id="lanHeading">连接同一 Wi-Fi 上的接收方</h2>
-        <p class="notice" id="lanStatus" role="status"></p>
-        <div id="lanDevices"></div>
-        <button type="button" id="searchLan" class="soft">重新搜索</button>
-      </section>
       <div class="shell" id="taskShell">
         <aside>
           <div class="railhead">
-            <h2 id="railTitle">任务</h2>
+            <div class="mailboxes" role="group" aria-label="任务方向">
+              <button class="filter" id="inboxTab" aria-pressed="true">收件箱</button>
+              <button class="filter" id="outboxTab" aria-pressed="false">我发出的</button>
+            </div>
             <span class="spacer"></span>
             <button
               class="filter"
@@ -525,6 +520,10 @@
               待处理
             </button>
           </div>
+          <div class="outbox-peers" id="outboxPeers" hidden>
+            <select class="soft peer-select" id="outPeer" aria-label="筛选接收设备"></select>
+            <button class="ghost" id="addPeer">添加设备</button>
+          </div>
           <nav id="list" aria-label="任务列表"></nav>
         </aside>
         <main class="content">
@@ -535,6 +534,16 @@
         </main>
       </div>
     </div>
+    <dialog id="addPeerDialog" aria-labelledby="lanHeading">
+      <div class="line">
+        <h2 id="lanHeading">添加设备</h2>
+        <span class="spacer"></span>
+        <button type="button" class="ghost" id="closeAddPeer">关闭</button>
+      </div>
+      <p class="notice" id="lanStatus" role="status"></p>
+      <div class="device-list" id="lanDevices"></div>
+      <button type="button" id="searchLan" class="soft">重新搜索</button>
+    </dialog>
     <dialog id="deviceDialog" aria-labelledby="deviceTitle">
       <div class="line">
         <h2 id="deviceTitle">设备权限</h2>
@@ -623,6 +632,10 @@
         pollTimer,
         applyingState = false;
       let syncDelay = 1600;
+      let mailbox = "inbox", outPeer = "", canReceive = true;
+      let peers = [], peerList = "";
+      const outPeerForView = () => mailbox === "outbox" ? outPeer : "";
+      const viewPeer = () => mailbox === "outbox" ? outPeer || "outbox" : "";
       const pending = new Map(),
         drafts = new Map();
       let draftScope = "";
@@ -767,50 +780,37 @@
         return text;
       }
       function connectionError(error) {
-        const message = messageFor(error);
-        $("connectionText").textContent = message;
+        $("connectionText").textContent = messageFor(error);
         $("connection").hidden = false;
-        if (message.includes("授权已失效") || message.includes("配对邀请已失效")) {
-          $("connection").hidden = true;
-          showLanConnect("denied");
-        } else if (screen === "initial") {
-          $("detail").replaceChildren(el("p", "notice", "正在等待连接。"));
-          $("list").textContent = "暂时无法读取任务。";
-        }
+        if (screen === "initial") $("detail").textContent = "正在等待连接。";
       }
-      function showLanConnect(state) {
-        if (screen === "connect" && data.connection === state) return;
-        data = { owner: false, tasks: [], connection: state };
-        signature = "";
-        chosen = null;
-        screen = "connect";
-        openDrafts("");
-        for (const id of ["taskShell", "gear", "new", "pendingDevices"]) $(id).hidden = true;
-        $("lanConnect").hidden = false;
-        $("lanDevices").replaceChildren();
-        $("searchLan").hidden = state === "pending";
-        $("lanStatus").textContent =
-          state === "pending"
-            ? "连接申请已发出，等接收方同意后会自动进入协作任务。"
-            : state === "denied"
-              ? "连接申请未获批准或授权已失效。可选择接收方重新申请。"
-              : "正在查找同一 Wi-Fi 上的接收方。";
-        if (state === "unpaired") $("searchLan").click();
+      function addDevice() {
+        $("addPeerDialog").showModal();
+        $("searchLan").click();
       }
+      $("closeAddPeer").onclick = () => $("addPeerDialog").close();
+      $("addPeer").onclick = addDevice;
       $("searchLan").onclick = () => act($("searchLan"), async () => {
-        $("lanStatus").textContent = "正在搜索…";
+        $("lanStatus").textContent = "正在搜索同一 Wi-Fi 上的设备…";
         $("lanDevices").replaceChildren();
         const { devices } = await call("discover_lan");
-        if (disposed || screen !== "connect" || data.connection === "pending") return;
         $("lanStatus").textContent = devices.length
-          ? "选择你认识的接收方。首次连接需要对方同意。"
-          : "暂未找到接收方。请确认对方已安装接收端，两台 Mac 在同一个可互访的 Wi-Fi。";
+          ? "选择设备，等待对方同意后即可发送任务。"
+          : "没有找到设备。请确认对方打开了协作任务，两台 Mac 在同一个可互访的 Wi-Fi。";
         for (const device of devices) {
           const row = el("div", "line device-row");
           const connectDevice = button("请求连接", "soft", async () => {
-            const r = await call("request_lan", { endpoint: device.endpoint, pin: device.pin });
-            showLanConnect(r.connection);
-            await refreshVisible();
+            const result = await call("request_lan", { endpoint: device.endpoint, pin: device.pin });
+            $("addPeerDialog").close();
+            if (screen === "new") {
+              const d = draft("new", "");
+              d.peer = result.peer;
+              edited(d);
+              await refresh(true);
+            } else {
+              await showMailbox("outbox", result.peer);
+            }
+            toast(result.connection === "ready" ? "设备已连接" : "已发送连接申请");
           });
           connectDevice.setAttribute("aria-label", "请求连接 " + device.name);
           row.append(el("strong", "", device.name), connectDevice);
@@ -1093,7 +1093,7 @@
             f.name,
             "chip",
             async () => {
-              const r = await call("save_file", { id: task.id, slot: f.slot });
+              const r = await call("save_file", { id: task.id, slot: f.slot, peer: outPeerForView() });
               if (r.saved) toast("文件已保存");
             },
             "file",
@@ -1265,7 +1265,7 @@
         );
         parent.append(detail);
       }
-      let localVersion = "0.6.2";
+      let localVersion = "0.7.0";
       let lanVersion, githubVersion, offeredUpdate;
       let updates = { status: "idle", autoInstall: false };
       let installingUpdate = false, updateResult = "", autoRetryAt = 0;
@@ -1280,7 +1280,7 @@
           const difference = parts.findIndex((part, i) => part !== other[i]);
           return difference >= 0 && parts[difference] > other[difference];
         };
-        const lan = !data.owner && lanVersion && later(lanVersion, localVersion);
+        const lan = !canReceive && lanVersion && later(lanVersion, localVersion);
         const github = githubVersion && later(githubVersion, localVersion);
         const useGithub = github && (!lan || later(githubVersion, lanVersion));
         offeredUpdate = useGithub ? { source: "github", version: githubVersion }
@@ -1338,14 +1338,26 @@
 
       function paint(listOnly = false) {
         $("taskShell").hidden = false;
-        $("lanConnect").hidden = true;
+        $("inboxTab").hidden = !canReceive;
+        $("inboxTab").setAttribute("aria-pressed", String(mailbox === "inbox"));
+        $("outboxTab").setAttribute("aria-pressed", String(mailbox === "outbox"));
+        $("outboxPeers").hidden = mailbox !== "outbox";
+        $("outPeer").hidden = !peers.length;
+        if ($("outPeer").dataset.list !== peerList) {
+          $("outPeer").dataset.list = peerList;
+          $("outPeer").replaceChildren(...peers.map((peer) => {
+            const option = el("option", "", peer.name);
+            option.value = peer.id;
+            return option;
+          }));
+        }
+        $("outPeer").value = outPeer;
         $("pendingDevices").hidden = !data.owner || !data.pendingDevices;
         $("pendingDevices").textContent = "设备申请 (" + (data.pendingDevices || 0) + ")";
         $("gear").hidden = !data.owner;
         $("filter").hidden = !data.owner;
         $("refresh").hidden = false;
         $("new").hidden = screen === "new";
-        $("railTitle").textContent = data.owner ? "收件箱" : "我发布的任务";
         $("mode").replaceChildren(
           icon("sliders"),
           document.createTextNode(
@@ -1398,31 +1410,66 @@
         pane.replaceChildren();
         if (screen === "new") {
           const d = draft("new", "");
+          const origin = viewPeer();
           pane.append(el("h2", "", "发布任务"));
+          const recipient = el("div", "recipient");
+          const label = el("label", "", "发送给");
+          label.htmlFor = "recipient";
+          const picker = el("select", "soft peer-select");
+          picker.id = "recipient";
+          picker.append(el("option", "", "选择接收设备"));
+          picker.options[0].value = "";
+          for (const peer of [...peers, ...(canReceive ? [{ id: "local", name: "我自己（本机）" }] : [])]) {
+            const option = el("option", "", peer.name);
+            option.value = peer.id;
+            picker.append(option);
+          }
+          picker.value = d.peer ?? outPeerForView();
+          d.peer = picker.value;
+          recipient.append(label, picker, button("添加设备", "ghost", addDevice));
+          pane.append(recipient);
           const section = el("div", "message");
           pane.append(section);
-          composer(
+          const compose = composer(
             section,
             d,
             "任务内容",
             "发布任务",
             async () => {
+              const target = d.peer === "local" ? "" : d.peer;
               const r = await call("publish", {
                 text: d.text,
                 files: d.files.map((f) => f.key),
+                peer: target,
               });
+              if (origin !== viewPeer()) return;
+              if (target !== origin) {
+                mailbox = target ? "outbox" : "inbox";
+                if (target) outPeer = target;
+                data = { owner: !target, tasks: [] };
+              }
               await submitted(null, r, "new", "任务已发布");
             },
-            "希望对方的 Codex 完成什么？",
-            { hint: "可添加文件或粘贴截图，最多 8 个文件，共 16 MiB。" },
+            "描述你希望完成的工作…",
+            {
+              unavailable: () => d.peer ? "" : "请选择接收设备",
+              hint: "可添加文件或粘贴截图，最多 8 个文件，共 16 MiB。",
+            },
           );
+          picker.onchange = () => {
+            d.peer = picker.value;
+            edited(d);
+            compose.update();
+          };
           return;
         }
         const t = data.tasks.find((o) => o.id === chosen);
         if (!t) {
           const empty = el("div", "empty");
           empty.append(icon("inbox"));
-          if (onlyPending)
+          if (screen === "initial")
+            empty.append(el("h2", "", "正在读取任务…"));
+          else if (onlyPending)
             empty.append(
               el("h2", "", "没有待处理任务"),
               button("查看全部任务", "ghost", () => {
@@ -1436,6 +1483,10 @@
               el("h2", "", "正在同步任务"),
               el("p", "", "任务已提交，正在读取最新记录。"),
             );
+          else if (data.connection === "pending")
+            empty.append(el("h2", "", "等待对方同意"), el("p", "", "对方可在收件箱的「设备申请」里处理。"));
+          else if (data.syncError)
+            empty.append(el("h2", "", "暂时无法读取任务"));
           else
             empty.append(
               el("h2", "", data.owner ? "收件箱已就绪" : "还没有发布任务"),
@@ -1444,7 +1495,9 @@
                 "",
                 data.owner
                   ? "协作者发来的任务会出现在这里。"
-                  : "点击「新建任务」开始发布。",
+                  : peers.length
+                    ? "点击「新建任务」开始发布。"
+                    : "添加一台设备后，即可给对方发送任务。",
               ),
             );
           pane.append(empty);
@@ -1454,7 +1507,8 @@
         meta.append(
           icon("user"),
           document.createTextNode(
-            t.sender + " · " + stamp(t.created) + " · " + stateName(t),
+            (data.owner ? t.sender : "发给 " + (peers.find((peer) => peer.id === outPeer)?.name || t.sender))
+              + " · " + stamp(t.created) + " · " + stateName(t),
           ),
         );
         pane.append(meta);
@@ -1615,6 +1669,7 @@
             "发送补充",
             async () => {
               const r = await call("reply", {
+                peer: outPeerForView(),
                 id: t.id,
                 text: d.text,
                 files: d.files.map((f) => f.key),
@@ -1669,81 +1724,79 @@
           if (copy[t.status]) pane.append(el("p", "notice", copy[t.status]));
         }
       }
+      async function showMailbox(target, peer = outPeer || peers[0]?.id || "") {
+        saveDrafts();
+        mailbox = target;
+        outPeer = peer;
+        screen = "initial";
+        chosen = null;
+        onlyPending = false;
+        data = { owner: target === "inbox", tasks: [] };
+        signature = "";
+        $("frame").dataset.screen = "list";
+        paint();
+        await refresh(true);
+      }
+      $("inboxTab").onclick = () => act($("inboxTab"), () => showMailbox("inbox"));
+      $("outboxTab").onclick = () => act($("outboxTab"), () => showMailbox("outbox"));
+      $("outPeer").onchange = () => act($("outPeer"), () => showMailbox("outbox", $("outPeer").value));
+
       async function refresh(force = false) {
         if (disposed) return;
         const n = ++refreshSeq;
-        let v;
-        try {
-          v = await call("sync_state", { revision: force ? "" : data.revision || "" });
-        } catch (e) {
-          if (n === refreshSeq) throw e;
-          return;
-        }
+        const target = viewPeer();
+        const v = await call("sync_state", {
+          revision: force ? "" : data.revision || "",
+          peer: target,
+        });
         if (disposed || n !== refreshSeq) return;
         $("connection").hidden = true;
-        syncDelay = 1600;
+        syncDelay = v.syncError ? Math.min(syncDelay * 2, 15000) : 1600;
         updates = v.updates || updates;
         githubVersion = v.githubVersion;
-        if (v.syncError) {
-          lanVersion = null;
-          connectionError(Error(v.syncError));
-          updateOffer();
-          maybeInstallUpdate();
-          return;
+        canReceive = v.receiver ?? canReceive;
+        peers = v.peers ?? peers;
+        if (!canReceive && !target) return showMailbox("outbox");
+        if (target === "outbox" && peers.length) {
+          outPeer = peers[0].id;
+          return refresh(true);
         }
-        if (v.unchanged) {
-          updateOffer();
-          maybeInstallUpdate();
-          return;
-        }
-        if (v.connection) {
-          showLanConnect(v.connection);
-          lanVersion = null;
-          updateOffer();
-          maybeInstallUpdate();
-          return;
-        }
-        const requestsChanged = data.pendingDevices !== v.pendingDevices;
-        const sig = v.revision || JSON.stringify(v),
-          oldChosen = chosen;
-        const oldTask = data.tasks.find((t) => t.id === chosen),
-          changedIdentity =
-            data.draftScope !== v.draftScope || data.owner !== v.owner;
-        if (changedIdentity && screen !== "initial") {
-          screen = "initial";
-          chosen = null;
-          onlyPending = false;
-          $("frame").dataset.screen = "list";
-        }
-        const restored = openDrafts(v.draftScope || "");
-        data = v;
-        lanVersion = v.updateVersion;
-        updateOffer();
-        if (screen === "initial") {
-          screen =
-            restored?.screen || (!v.owner && !v.tasks.length ? "new" : "task");
-          chosen = restored?.chosen || null;
-          $("frame").dataset.screen =
-            restored?.layout || (screen === "new" ? "detail" : "list");
-        }
-        if (screen === "task") {
-          const visible = v.tasks.filter((t) => !onlyPending || attention(t));
-          if (!visible.some((t) => t.id === chosen))
-            chosen = visible[0]?.id || null;
-        }
-        if (sig !== signature || force) {
-          const sameDetail =
-            screen === "new" ||
-            (oldChosen === chosen &&
-              JSON.stringify(oldTask) ===
-                JSON.stringify(v.tasks.find((t) => t.id === chosen)));
-          const firstPaint = !signature;
-          signature = sig;
-          paint(!firstPaint && !force && sameDetail);
-          if (requestsChanged && $("deviceDialog").open) {
-            renderDevices().catch((e) => { $("deviceError").textContent = messageFor(e); });
+        const nextPeers = JSON.stringify(peers);
+        const peersChanged = nextPeers !== peerList;
+        peerList = nextPeers;
+        if (v.syncError) connectionError(Error(v.syncError));
+        if (!v.unchanged) {
+          const scope = target ? "outbox/" + target : v.draftScope || "inbox";
+          const restored = openDrafts(scope);
+          const requestsChanged = data.pendingDevices !== v.pendingDevices;
+          const oldChosen = chosen;
+          const oldTask = data.tasks.find((t) => t.id === chosen);
+          data = { owner: !target && canReceive, tasks: [], ...v };
+          lanVersion = v.updateVersion;
+          if (screen === "initial") {
+            screen = restored?.screen || "task";
+            chosen = restored?.chosen || null;
+            $("frame").dataset.screen = restored?.layout || "list";
           }
+          if (screen === "task") {
+            const visible = data.tasks.filter((t) => !onlyPending || attention(t));
+            if (!visible.some((t) => t.id === chosen)) chosen = visible[0]?.id || null;
+          }
+          const sig = v.revision || JSON.stringify([v.connection, v.syncError, target]);
+          if (sig !== signature || force || peersChanged) {
+            const sameDetail = screen === "new" || (
+              oldChosen === chosen &&
+              JSON.stringify(oldTask) === JSON.stringify(data.tasks.find((t) => t.id === chosen))
+            );
+            paint(!!signature && !force && !peersChanged && sameDetail && (screen === "new" || !!chosen));
+            signature = sig;
+            if (requestsChanged && $("deviceDialog").open)
+              renderDevices().catch((e) => { $("deviceError").textContent = messageFor(e); });
+          }
+        } else if (peersChanged) {
+          paint(screen !== "new");
         }
+        updateOffer();
         maybeInstallUpdate();
         scheduleRefresh();
       }
@@ -1958,7 +2011,7 @@
           if (embedded) {
             const r = await rpc("ui/initialize", {
               protocolVersion: "2026-01-26",
-              appInfo: { name: "协作任务", version: "0.6.2" },
+              appInfo: { name: "协作任务", version: "0.7.0" },
               appCapabilities: {
                 availableDisplayModes: ["fullscreen", "inline"],
               },

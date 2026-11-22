@@ -7,6 +7,7 @@ import plistlib
 import re
 import secrets
 import shutil
+import socket
 import sqlite3
 import ssl
 import subprocess
@@ -26,6 +27,8 @@ ROOT = (
 )
 CODEX = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
 LABEL = "local.lan-task-center"
+if PROFILE != DEFAULT_PROFILE.resolve():
+    LABEL += "." + hashlib.sha256(os.fsencode(PROFILE)).hexdigest()[:12]
 PLIST = Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
 
 
@@ -157,8 +160,7 @@ def certificates(dns, addresses, relay_host=None):
             "IP:127.0.0.1",
             *[
                 "IP:" + str(ipaddress.IPv4Address(ip))
-                for ip in sorted(set(addresses))
-                if ip and ip != "127.0.0.1"
+                for ip in sorted({ip for ip in addresses if ip and ip != "127.0.0.1"})
             ],
         ]
         if relay_host:
@@ -270,11 +272,21 @@ def verify_connection(data, *, owner):
 
 def host(relay_config=None, *, lan_only=False):
     path = ROOT / "host.json"
-    cfg = (
-        json.loads(path.read_text())
-        if path.exists()
-        else {"port": 43871, "owner": secrets.token_urlsafe(32), "peers": []}
-    )
+    if path.exists():
+        cfg = json.loads(path.read_text())
+    else:
+        sys.path.insert(0, str(BASE / "plugin"))
+        from client import peers
+
+        links = peers(ROOT)
+        if links:
+            save(ROOT / "peers.json", links)
+        port = 43871
+        if PROFILE != DEFAULT_PROFILE.resolve():
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                port = listener.getsockname()[1]
+        cfg = {"port": port, "owner": secrets.token_urlsafe(32), "peers": []}
     device, ip, dns = network()
     if lan_only:
         cfg.pop("relay", None)
@@ -348,7 +360,7 @@ def host(relay_config=None, *, lan_only=False):
                     "接收服务未能启动，请查看本机协作任务的 host.log。"
                 ) from None
             time.sleep(0.2)
-    print("接收端已就绪。在 Codex 的「… → 协作任务」查看收件箱。")
+    print("协作任务已就绪。在 Codex 的「… → 协作任务」收发任务。")
 
 
 def invite(destination, name, local=False):
@@ -428,14 +440,17 @@ def redeem(code):
 
 
 def guest(invitation=None):
-    if (ROOT / "host.json").exists():
-        raise ValueError(
-            "当前 Codex 已作为接收端。请在发布方 Mac 或独立的 Codex 实例中配对。"
-        )
+    sys.path.insert(0, str(BASE / "plugin"))
+    from client import peers
+    from lan import fingerprint
+
     data = json.loads(invitation.read_text()) if invitation else redeem(input().strip())
     verify_connection(data, owner=False)
-    install()
-    save(ROOT / "connection.json", data)
+    links = peers(ROOT)
+    name = urlsplit(data["url"]).hostname.removesuffix(".local")
+    links[fingerprint(data["ca"])] = {"name": name, **data}
+    save(ROOT / "peers.json", links)
+    host()
     print("配对成功。在 Codex 的「… → 协作任务」发布任务。")
 
 
@@ -445,19 +460,16 @@ if __name__ == "__main__":
     ROOT.chmod(0o700)
     try:
         if (
-            sys.argv[1] in ("host", "publisher", "pair", "guest", "relay")
+            sys.argv[1] in ("install", "host", "publisher", "pair", "guest", "relay")
             and not Path(CODEX).is_file()
         ):
             raise ValueError("请先把包含 Codex 的 ChatGPT 桌面版安装到「应用程序」。")
-        if sys.argv[1] == "host":
+        if sys.argv[1] in ("install", "publisher"):
+            host()
+        elif sys.argv[1] == "host":
             host(lan_only=True)
         elif sys.argv[1] == "relay":
             host(json.loads(Path(sys.argv[2]).read_text()))
-        elif sys.argv[1] == "publisher":
-            if (ROOT / "host.json").is_file():
-                raise ValueError("当前 Codex 已安装为接收端")
-            install()
-            print("发布端已安装。打开 Codex 的「… → 协作任务」连接接收方。")
         elif sys.argv[1] == "pair":
             guest()
         elif sys.argv[1] == "guest":
@@ -475,7 +487,7 @@ if __name__ == "__main__":
             save(path, cfg)
             print("发布者邀请已撤销。")
         else:
-            raise ValueError("请选择 host、publisher、guest、invite 或 revoke 操作。")
+            raise ValueError("请选择 install、guest、invite 或 revoke 操作。")
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         if (
             isinstance(exc, (ConnectionError, TimeoutError))

@@ -25,6 +25,8 @@ def fingerprint(ca):
 
 def advertise(config, ca):
     instance = config["dns"].removesuffix(".local")[:55]
+    if config["port"] != 43871:
+        instance += "-" + str(config["port"])
     args = ["-i", config["wifi_device"]] if config.get("wifi_device") else []
     return subprocess.Popen(
         [
@@ -72,7 +74,11 @@ def discover():
                 pins[fields[0]] = pin[1]
     return {
         "devices": [
-            {"name": host[:-6], "endpoint": f"{host}:{port}", "pin": pins[instance]}
+            {
+                "name": host[:-6] if port == 43871 else f"{host[:-6]}:{port}",
+                "endpoint": f"{host}:{port}",
+                "pin": pins[instance],
+            }
             for instance, (host, port) in endpoints.items()
             if instance in pins and 1 <= port <= 65535
         ]

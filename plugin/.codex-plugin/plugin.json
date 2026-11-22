@@ -1,6 +1,6 @@
 {
   "name": "task-center",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "通过同一 Wi-Fi 收发任务和附件。手动选择 Codex 对话并编辑提示词，或开启自动接单。",
   "mcpServers": "./.mcp.json",
   "interface": {
