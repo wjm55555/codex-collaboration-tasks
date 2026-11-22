@@ -18,8 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
-from client import LIMIT, ROOT
-from lan import advertise, fingerprint
+from client import LIMIT, ROOT, peers
+from lan import PIN, advertise, confirm_link, fingerprint, lan_endpoint
 from relay import receiver_socket
 from release import available, package
 from worker import chats, execute, queue_state, queued_in_thread, session
@@ -240,7 +240,7 @@ def dispatch(db, action, args, actor, sender):
             "requests": [
                 dict(row)
                 for row in db.execute(
-                    "SELECT id,name FROM lan_requests WHERE created>? ORDER BY created,id",
+                    "SELECT id,name,callback IS NOT NULL AS mutual FROM lan_requests WHERE created>? ORDER BY created,id",
                     (int(time.time()) - 3600,),
                 )
             ],
@@ -251,16 +251,34 @@ def dispatch(db, action, args, actor, sender):
         if not isinstance(device, str) or type(allow) is not bool:
             raise ValueError("请选择连接申请")
         request = db.execute(
-            "SELECT id,name,digest FROM lan_requests WHERE id=? AND created>?",
+            "SELECT id,name,digest,callback FROM lan_requests WHERE id=? AND created>?",
             (device, int(time.time()) - 3600),
         ).fetchone()
         if request is None:
             raise ValueError("这条申请已处理或已过期")
         if allow:
-            db.execute(
-                "INSERT INTO devices(id,name,digest,mode) VALUES(?,?,?,'manual')",
-                tuple(request),
-            )
+            digest = request["digest"]
+            existing = db.execute(
+                "SELECT revoked FROM devices WHERE digest=?", (digest,)
+            ).fetchone()
+            if existing and existing[0]:
+                raise ValueError("这条申请的授权已撤销，请让对方重新申请")
+            if request["callback"]:
+                callback = json.loads(request["callback"])
+                pin = callback["pin"]
+                previous = peers(ROOT).get(pin)
+                config = confirm_link(callback, previous)
+                config["name"] = previous["name"] if previous else request["name"]
+                db.execute(
+                    "INSERT INTO lan_links(pin,config) VALUES(?,?) "
+                    "ON CONFLICT(pin) DO UPDATE SET config=excluded.config",
+                    (pin, json.dumps(config)),
+                )
+            if not existing:
+                db.execute(
+                    "INSERT INTO devices(id,name,digest,mode) VALUES(?,?,?,'manual')",
+                    (request["id"], request["name"], digest),
+                )
         db.execute("DELETE FROM lan_requests WHERE id=?", (device,))
         return {"ok": True}
     if action in ("device_mode", "revoke_device"):
@@ -590,8 +608,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("请求过大或格式无效")
             path = self.path
             if path == "/pair/authority":
-                data = {"ca": (ROOT / "cert.pem").read_text()}
-            elif path == "/pair/request":
+                data = {"ca": (ROOT / "cert.pem").read_text(), "mutualPairing": True}
+            elif path in ("/pair/request", "/pair/mutual-request"):
                 if getattr(self.server, "publisher_only", False) or length > 1024:
                     raise PermissionError()
                 args = json.loads(self.rfile.read(length))
@@ -603,9 +621,25 @@ class Handler(BaseHTTPRequestHandler):
                     or not 1 <= len(name.strip()) <= 64
                     or not name.strip().isprintable()
                     or not isinstance(token, str)
-                    or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token)
+                    or not re.fullmatch(PIN, token)
                 ):
                     raise ValueError("设备申请格式无效")
+                callback = None
+                if path == "/pair/mutual-request":
+                    value = args.get("callback")
+                    if (
+                        not isinstance(value, dict)
+                        or not lan_endpoint(value.get("endpoint"))
+                        or not isinstance(value.get("pin"), str)
+                        or not re.fullmatch(PIN, value["pin"])
+                        or not isinstance(value.get("token"), str)
+                        or not re.fullmatch(PIN, value["token"])
+                        or value["pin"] == fingerprint((ROOT / "cert.pem").read_text())
+                    ):
+                        raise ValueError("双向连接申请格式无效")
+                    callback = json.dumps(
+                        {key: value[key] for key in ("endpoint", "pin", "token")}
+                    )
                 digest = hashlib.sha256(token.encode()).hexdigest()
                 now = int(time.time())
                 with closing(connect()) as db, db:
@@ -619,10 +653,68 @@ class Handler(BaseHTTPRequestHandler):
                     ):
                         raise ValueError("接收方有较多待处理申请，请稍后重试")
                     db.execute(
-                        "INSERT OR IGNORE INTO lan_requests(id,name,digest,created) VALUES(?,?,?,?)",
-                        (secrets.token_hex(12), name.strip(), digest, now),
+                        "INSERT INTO lan_requests(id,name,digest,created,callback) VALUES(?,?,?,?,?) "
+                        "ON CONFLICT(digest) DO UPDATE SET "
+                        "callback=coalesce(excluded.callback,lan_requests.callback)",
+                        (secrets.token_hex(12), name.strip(), digest, now, callback),
                     )
                 data = {"connection": "pending"}
+            elif path == "/pair/confirm":
+                if getattr(self.server, "publisher_only", False) or length > 512:
+                    raise PermissionError()
+                args = json.loads(self.rfile.read(length))
+                if not isinstance(args, dict):
+                    raise ValueError("连接确认格式无效")
+                token, previous = args.get("token"), args.get("previous", "")
+                if (
+                    not isinstance(token, str)
+                    or not re.fullmatch(PIN, token)
+                    or not isinstance(previous, str)
+                    or previous
+                    and not re.fullmatch(PIN, previous)
+                ):
+                    raise ValueError("连接确认格式无效")
+                digest = hashlib.sha256(token.encode()).hexdigest()
+                prior = hashlib.sha256(previous.encode()).hexdigest()
+                with closing(connect()) as db, db:
+                    db.execute("BEGIN IMMEDIATE")
+                    offer = db.execute(
+                        "SELECT config,confirmed FROM lan_links WHERE offer=? AND expires>?",
+                        (digest, int(time.time())),
+                    ).fetchone()
+                    if not offer:
+                        raise PermissionError()
+                    if offer["confirmed"]:
+                        accepted = offer["confirmed"]
+                        if (
+                            accepted not in (digest, prior)
+                            or not db.execute(
+                                "SELECT 1 FROM devices WHERE digest=? AND revoked=0",
+                                (accepted,),
+                            ).fetchone()
+                        ):
+                            raise PermissionError()
+                    else:
+                        config = json.loads(offer["config"])
+                        accepted = (
+                            prior
+                            if db.execute(
+                                "SELECT 1 FROM devices WHERE digest=? AND revoked=0",
+                                (prior,),
+                            ).fetchone()
+                            else digest
+                        )
+                        if accepted == digest:
+                            db.execute(
+                                "INSERT INTO devices(id,name,digest,mode) VALUES(?,?,?,'manual')",
+                                (secrets.token_hex(12), config["name"], digest),
+                            )
+                        config["mutual"] = True
+                        db.execute(
+                            "UPDATE lan_links SET config=?,confirmed=? WHERE offer=?",
+                            (json.dumps(config), accepted, digest),
+                        )
+                data = {"reuse": accepted != digest}
             elif path == "/pair/redeem":
                 if length > 512:
                     raise ValueError("配对码格式无效")
@@ -717,6 +809,7 @@ def init(db):
       CREATE TABLE IF NOT EXISTS attachments(task TEXT, slot INTEGER, kind TEXT, name TEXT, body BLOB, PRIMARY KEY(task,slot));
       CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,name TEXT NOT NULL,digest TEXT UNIQUE NOT NULL,mode TEXT NOT NULL DEFAULT 'inherit',revoked INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS lan_requests(id TEXT PRIMARY KEY,name TEXT NOT NULL,digest TEXT UNIQUE NOT NULL,created INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS lan_links(pin TEXT PRIMARY KEY,config TEXT NOT NULL,offer TEXT,expires INTEGER,confirmed TEXT);
       CREATE TABLE IF NOT EXISTS pair_codes(digest TEXT PRIMARY KEY,name TEXT NOT NULL,expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS revisions(actor TEXT PRIMARY KEY,seq INTEGER NOT NULL);
       CREATE TRIGGER IF NOT EXISTS task_insert AFTER INSERT ON tasks BEGIN
@@ -724,6 +817,8 @@ def init(db):
       CREATE TRIGGER IF NOT EXISTS task_update AFTER UPDATE ON tasks BEGIN
         INSERT INTO revisions VALUES(new.actor,1) ON CONFLICT(actor) DO UPDATE SET seq=seq+1; END;
       DROP TABLE IF EXISTS routes;""")
+    if "callback" not in {r[1] for r in db.execute("PRAGMA table_info(lan_requests)")}:
+        db.execute("ALTER TABLE lan_requests ADD COLUMN callback TEXT")
     legacy = ROOT / "host.json"
     if legacy.is_file():
         for peer in json.loads(legacy.read_text()).get("peers", []):

@@ -4,7 +4,7 @@
 
 ## 安装
 
-从 [Releases](../../releases/latest) 下载 `collaboration-tasks-macos.zip`，解压后双击「安装协作任务.command」。从 Codex 左侧「… → 协作任务」打开，在「我发出的」添加设备。每个发送方向首次连接时，由收件人批准申请。
+从 [Releases](../../releases/latest) 下载 `collaboration-tasks-macos.zip`，解压后双击「安装协作任务.command」。从 Codex 左侧「… → 协作任务」打开，在「我发出的」添加设备。一方申请双向连接，对方同意一次后即可互发任务。
 
 更多操作见[使用说明](使用说明.md)。
 

@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 GITHUB_REPO = "wjm55555/codex-collaboration-tasks"
 RELEASE_ASSET = "collaboration-tasks-macos.zip"
 CHECK_INTERVAL = 3600

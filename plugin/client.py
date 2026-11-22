@@ -1,9 +1,13 @@
 import base64
+import hashlib
 import json
 import os
 import re
 import secrets
+import sqlite3
 import sys
+import time
+from contextlib import closing
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -101,15 +105,27 @@ def native_file(script, *args):
 def peers(root):
     from lan import fingerprint
 
-    links = root / "peers.json"
-    if links.is_file():
-        return json.loads(links.read_text())
+    links_file = root / "peers.json"
     legacy = root / "connection.json"
-    if not (root / "host.json").is_file() and legacy.is_file():
+    if links_file.is_file():
+        links = json.loads(links_file.read_text())
+    elif not (root / "host.json").is_file() and legacy.is_file():
         config = json.loads(legacy.read_text())
         name = urlsplit(config["url"]).hostname.removesuffix(".local")
-        return {fingerprint(config["ca"]): {"name": name, **config}}
-    return {}
+        links = {fingerprint(config["ca"]): {"name": name, **config}}
+    else:
+        links = {}
+    database = root / "tasks.sqlite"
+    if database.is_file():
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as db:
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='lan_links'"
+            ).fetchone():
+                links.update(
+                    (pin, json.loads(config))
+                    for pin, config in db.execute("SELECT pin,config FROM lan_links")
+                )
+    return links
 
 
 def local_action(action, args):
@@ -275,33 +291,35 @@ def request_lan(args):
     import http.client
     import ssl
     import subprocess
-    from lan import PIN, fingerprint, verified_authority
-    from release import write_json
+    from lan import PIN, fingerprint, lan_endpoint, verified_authority
 
     endpoint, pin = args.get("endpoint"), args.get("pin")
     if (
-        not isinstance(endpoint, str)
-        or not re.fullmatch(
-            r"[a-zA-Z0-9-]{1,63}\.local:[0-9]{1,5}", endpoint, re.IGNORECASE
-        )
-        or not 1 <= int(endpoint.rsplit(":", 1)[1]) <= 65535
+        not lan_endpoint(endpoint)
         or not isinstance(pin, str)
         or not re.fullmatch(PIN, pin)
     ):
         raise ValueError("请选择刚搜索到的接收端")
     own_ca = ROOT / "cert.pem"
-    if own_ca.is_file() and fingerprint(own_ca.read_text()) == pin:
+    if not own_ca.is_file():
+        raise ValueError("请先安装新版协作任务，再添加设备")
+    own_pin = fingerprint(own_ca.read_text())
+    if own_pin == pin:
         raise ValueError("请选择另一台接收设备")
     target = urlsplit("//" + endpoint)
-    links = peers(ROOT)
-    if pin in links:
+    known = peers(ROOT).get(pin)
+    token = secrets.token_urlsafe(32)
+    if known:
         try:
-            state = api("sync_state", {"peer": pin}, links=links)
+            state = api("sync_state", {"peer": pin}, links={pin: known})
         except ValueError as exc:
             if "授权已失效" not in str(exc):
                 raise
         else:
-            return {"connection": state.get("connection", "ready"), "peer": pin}
+            connection = state.get("connection", "ready")
+            if known.get("mutual") or connection == "pending" and known.get("offered"):
+                return {"connection": connection, "peer": pin}
+            token = known["token"]
     name = (
         subprocess.run(
             ["/usr/sbin/scutil", "--get", "ComputerName"],
@@ -311,8 +329,31 @@ def request_lan(args):
         ).stdout.strip()[:64]
         or "这台 Mac"
     )
-    token = secrets.token_urlsafe(32)
-    ca = verified_authority(endpoint, pin)
+    ca = verified_authority(endpoint, pin, require_mutual=True)
+    local = json.loads((ROOT / "host.json").read_text())
+    reverse_token = secrets.token_urlsafe(32)
+    callback = {
+        "endpoint": f"{local['dns']}:{local['port']}",
+        "pin": own_pin,
+        "token": reverse_token,
+    }
+    config = {
+        "name": f"{target.hostname.removesuffix('.local')}:{target.port}"
+        if target.port != 43871
+        else target.hostname.removesuffix(".local"),
+        "url": "https://" + endpoint,
+        "ca": ca,
+        "token": token,
+        "offered": True,
+    }
+    offer = hashlib.sha256(reverse_token.encode()).hexdigest()
+    with closing(sqlite3.connect(ROOT / "tasks.sqlite")) as db, db:
+        db.execute(
+            "INSERT INTO lan_links(pin,config,offer,expires) VALUES(?,?,?,?) "
+            "ON CONFLICT(pin) DO UPDATE SET config=excluded.config,offer=excluded.offer,"
+            "expires=excluded.expires,confirmed=NULL",
+            (pin, json.dumps(config), offer, int(time.time()) + 3600),
+        )
     conn = http.client.HTTPSConnection(
         target.hostname,
         target.port,
@@ -321,7 +362,11 @@ def request_lan(args):
     )
     try:
         conn.request(
-            "POST", "/pair/request", json.dumps({"name": name, "token": token}).encode()
+            "POST",
+            "/pair/mutual-request",
+            json.dumps(
+                {"name": name, "token": token, "callback": callback}, ensure_ascii=False
+            ).encode(),
         )
         response = conn.getresponse()
         data = json.load(response)
@@ -329,16 +374,6 @@ def request_lan(args):
             raise ValueError(data.get("error", "连接申请失败"))
     finally:
         conn.close()
-    ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
-    links[pin] = {
-        "name": f"{target.hostname.removesuffix('.local')}:{target.port}"
-        if target.port != 43871
-        else target.hostname.removesuffix(".local"),
-        "url": "https://" + endpoint,
-        "ca": ca,
-        "token": token,
-    }
-    write_json(ROOT / "peers.json", links)
     return {"connection": "pending", "peer": pin}
 
 

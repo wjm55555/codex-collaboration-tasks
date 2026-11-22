@@ -13,6 +13,15 @@ from urllib.parse import urlsplit
 SERVICE = "_codex-tc._tcp"
 DNS_SD = "/usr/bin/dns-sd"
 PIN = r"[A-Za-z0-9_-]{43}"
+ENDPOINT = r"[a-zA-Z0-9-]{1,63}\.local:[1-9][0-9]{0,4}"
+
+
+def lan_endpoint(value):
+    return (
+        isinstance(value, str)
+        and re.fullmatch(ENDPOINT, value, re.IGNORECASE)
+        and int(value.rsplit(":", 1)[1]) <= 65535
+    )
 
 
 def fingerprint(ca):
@@ -85,7 +94,7 @@ def discover():
     }
 
 
-def verified_authority(endpoint, pin):
+def verified_authority(endpoint, pin, *, require_mutual=False):
     target = urlsplit("//" + endpoint)
     # Fetch public CA material before sending any device credential.
     bootstrap = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -103,6 +112,40 @@ def verified_authority(endpoint, pin):
         ca = data.get("ca") if isinstance(data, dict) else None
         if not isinstance(ca, str) or not hmac.compare_digest(pin, fingerprint(ca)):
             raise ValueError("设备证书已变化，请重新搜索接收方")
+        if require_mutual and data.get("mutualPairing") is not True:
+            raise ValueError("请让对方升级到 0.7.1 或更新版本，再发起双向连接")
         return ca
     finally:
         conn.close()
+
+
+def confirm_link(callback, previous):
+    endpoint = callback["endpoint"]
+    target = urlsplit("//" + endpoint)
+    try:
+        ca = verified_authority(endpoint, callback["pin"])
+        conn = http.client.HTTPSConnection(
+            target.hostname,
+            target.port,
+            timeout=4,
+            context=ssl.create_default_context(cadata=ca),
+        )
+        try:
+            body = {"token": callback["token"]}
+            if previous:
+                body["previous"] = previous["token"]
+            conn.request("POST", "/pair/confirm", json.dumps(body).encode())
+            res = conn.getresponse()
+            if res.status != 200:
+                raise ValueError("连接申请已失效，请让对方重新申请")
+            reuse = json.load(res)["reuse"]
+        finally:
+            conn.close()
+    except (OSError, http.client.HTTPException) as exc:
+        raise ValueError("暂时连接不到发起设备，请让对方保持在线后再同意") from exc
+    return {
+        "url": "https://" + endpoint,
+        "ca": ca,
+        "token": previous["token"] if reuse else callback["token"],
+        "mutual": True,
+    }

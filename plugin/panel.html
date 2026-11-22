@@ -542,6 +542,7 @@
       </div>
       <p class="notice" id="lanStatus" role="status"></p>
       <div class="device-list" id="lanDevices"></div>
+      <div role="alert" class="error" id="lanError"></div>
       <button type="button" id="searchLan" class="soft">重新搜索</button>
     </dialog>
     <dialog id="deviceDialog" aria-labelledby="deviceTitle">
@@ -550,7 +551,7 @@
         <span class="spacer"></span>
         <button type="button" class="ghost" id="closeDevices">关闭</button>
       </div>
-      <p class="notice">协作者只能查看自己发布的任务。新设备默认手动接单。</p>
+      <p class="notice">同意双向连接后，双方可以互发任务。新设备默认手动接单。协作者只能查看自己发布的任务。</p>
       <div id="deviceList" class="device-list"></div>
       <div role="alert" class="error" id="deviceError"></div>
     </dialog>
@@ -795,11 +796,11 @@
         $("lanDevices").replaceChildren();
         const { devices } = await call("discover_lan");
         $("lanStatus").textContent = devices.length
-          ? "选择设备，等待对方同意后即可发送任务。"
+          ? "申请即同意双方互发任务。对方同意后即可开始。"
           : "没有找到设备。请确认对方打开了协作任务，两台 Mac 在同一个可互访的 Wi-Fi。";
         for (const device of devices) {
           const row = el("div", "line device-row");
-          const connectDevice = button("请求连接", "soft", async () => {
+          const connectDevice = button("申请双向连接", "soft", async () => {
             const result = await call("request_lan", { endpoint: device.endpoint, pin: device.pin });
             $("addPeerDialog").close();
             if (screen === "new") {
@@ -810,9 +811,9 @@
             } else {
               await showMailbox("outbox", result.peer);
             }
-            toast(result.connection === "ready" ? "设备已连接" : "已发送连接申请");
+            toast(result.connection === "ready" ? "设备已连接" : "已发送双向连接申请");
           });
-          connectDevice.setAttribute("aria-label", "请求连接 " + device.name);
+          connectDevice.setAttribute("aria-label", "申请双向连接 " + device.name);
           row.append(el("strong", "", device.name), connectDevice);
           $("lanDevices").append(row);
         }
@@ -843,11 +844,12 @@
       }
       async function act(b, fn) {
         b.disabled = true;
-        $($("deviceDialog").open ? "deviceError" : "alert").textContent = "";
+        const error = $($("deviceDialog").open ? "deviceError" : $("addPeerDialog").open ? "lanError" : "alert");
+        error.textContent = "";
         try {
           await fn();
         } catch (e) {
-          $($("deviceDialog").open ? "deviceError" : "alert").textContent = messageFor(e);
+          error.textContent = messageFor(e);
         } finally {
           b.disabled = false;
         }
@@ -1265,7 +1267,7 @@
         );
         parent.append(detail);
       }
-      let localVersion = "0.7.0";
+      let localVersion = "0.7.1";
       let lanVersion, githubVersion, offeredUpdate;
       let updates = { status: "idle", autoInstall: false };
       let installingUpdate = false, updateResult = "", autoRetryAt = 0;
@@ -1484,7 +1486,7 @@
               el("p", "", "任务已提交，正在读取最新记录。"),
             );
           else if (data.connection === "pending")
-            empty.append(el("h2", "", "等待对方同意"), el("p", "", "对方可在收件箱的「设备申请」里处理。"));
+            empty.append(el("h2", "", "等待对方同意"), el("p", "", "对方在「设备申请」里同意后，双方就可以互发任务。"));
           else if (data.syncError)
             empty.append(el("h2", "", "暂时无法读取任务"));
           else
@@ -1923,9 +1925,10 @@
             await call("decide_connection", { device: request.id, allow });
             await renderDevices();
             await refreshVisible();
+            if (allow && request.mutual) toast("已建立双向连接");
           };
           row.append(
-            el("strong", "", request.name + " 请求连接"),
+            el("strong", "", request.name + (request.mutual ? " 申请双向连接" : " 请求连接")),
             button("拒绝", "ghost", () => decide(false)),
             button("同意", "solid", () => decide(true)),
           );
@@ -2011,7 +2014,7 @@
           if (embedded) {
             const r = await rpc("ui/initialize", {
               protocolVersion: "2026-01-26",
-              appInfo: { name: "协作任务", version: "0.7.0" },
+              appInfo: { name: "协作任务", version: "0.7.1" },
               appCapabilities: {
                 availableDisplayModes: ["fullscreen", "inline"],
               },
