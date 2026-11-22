@@ -74,11 +74,104 @@
         content: ""; width: 6px; height: 6px; border-radius: 50%;
         background: #776bba; position: absolute; top: 3px; right: 3px;
       }
-      #updatesDialog .update-label { display: flex; gap: 8px; align-items: center; margin: 16px 0 12px; }
-      #updatesDialog .update-label input { min-height: 0; }
-      #updatesDialog .update-actions { justify-content: flex-end; margin-top: 18px; }
-      #updateStatus { margin-top: 12px; }
-      #updateChecked { margin: 4px 0 0; }
+      #updatesDialog {
+        --update-accent: light-dark(#655c94, #aaa0df);
+        --update-tint: color-mix(in srgb, var(--update-accent) 12%, var(--surface));
+        width: min(408px, calc(100% - 24px));
+        padding: 0;
+        border-radius: 15px;
+        box-shadow: 0 18px 54px light-dark(#17161e26, #0007);
+      }
+      #updatesDialog::backdrop { background: light-dark(#18171d42, #0b0a11a6); }
+      .update-head, .update-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 16px;
+      }
+      .update-head { justify-content: space-between; padding-inline-start: 18px; }
+      .update-head h2 { font-size: 16px; font-weight: 620; }
+      .update-close {
+        width: 32px;
+        padding: 0;
+        font-size: 22px;
+        font-weight: 400;
+        line-height: 1;
+      }
+      .update-body { padding: 0 16px; }
+      .update-summary {
+        display: grid;
+        grid-template-columns: 30px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        padding: 12px;
+        border: 1px solid var(--stroke);
+        border-radius: 11px;
+        background: var(--side);
+      }
+      .update-icon {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        color: var(--update-accent);
+        background: var(--update-tint);
+      }
+      #updateStatus { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+      #updateChecked {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1px 10px;
+        margin-top: 2px;
+        color: var(--sub);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      .update-setting {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 2px;
+        cursor: pointer;
+      }
+      .update-setting strong { display: block; font-size: 13px; font-weight: 560; }
+      .update-setting small { display: block; margin-top: 2px; color: var(--sub); font-size: 12px; }
+      #autoInstallUpdate {
+        appearance: none;
+        display: grid;
+        align-items: center;
+        flex: none;
+        width: 36px;
+        height: 22px;
+        min-height: 0;
+        margin: 0;
+        padding: 2px;
+        border: 1px solid var(--control);
+        border-radius: 99px;
+        background: var(--control);
+        cursor: pointer;
+      }
+      #autoInstallUpdate::before {
+        content: "";
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 3px #16141d28;
+      }
+      #autoInstallUpdate:checked { border-color: transparent; background: var(--update-accent); }
+      #autoInstallUpdate:checked::before {
+        transform: translateX(14px);
+        background: light-dark(#fff, #23212a);
+      }
+      #autoInstallUpdate:disabled { opacity: .5; cursor: default; }
+      .update-actions {
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        border-top: 1px solid var(--stroke);
+      }
       .mark { display: block; width: 26px; height: 26px; flex: none; }
       .spacer { flex: 1; }
       .soft, .solid, .ghost, .chip, .filter, .pick {
@@ -557,18 +650,30 @@
       <div role="alert" class="error" id="deviceError"></div>
     </dialog>
     <dialog id="updatesDialog" aria-labelledby="updatesTitle">
-      <div class="line">
-        <h2 id="updatesTitle">更新</h2><span class="spacer"></span>
-        <button type="button" class="ghost" id="closeUpdates">关闭</button>
+      <div class="update-head">
+        <h2 id="updatesTitle">更新</h2>
+        <button type="button" class="ghost update-close" id="closeUpdates" aria-label="关闭">×</button>
       </div>
-      <p id="updateStatus" role="status"></p>
-      <p id="updateChecked" class="notice"></p>
-      <label class="update-label">
-        <input type="checkbox" id="autoInstallUpdate" />
-        <span>自动安装更新</span>
-      </label>
-      <p class="notice">打开协作任务时检查新版。接收端会等任务执行完再安装。</p>
-      <div class="line update-actions">
+      <div class="update-body">
+        <div class="update-summary">
+          <span class="update-icon" data-icon="refresh" aria-hidden="true"></span>
+          <div>
+            <p id="updateStatus" role="status"></p>
+            <p id="updateChecked">
+              <span id="installedUpdateVersion"></span>
+              <span id="lastUpdateCheck" hidden></span>
+            </p>
+          </div>
+        </div>
+        <label class="update-setting">
+          <span>
+            <strong id="autoUpdateTitle">自动安装更新</strong>
+            <small id="autoUpdateHint">打开面板时检查，任务结束后安装。</small>
+          </span>
+          <input type="checkbox" id="autoInstallUpdate" aria-labelledby="autoUpdateTitle" aria-describedby="autoUpdateHint" />
+        </label>
+      </div>
+      <div class="update-actions">
         <button type="button" class="soft" id="checkUpdates">检查更新</button>
         <button type="button" class="solid" id="installUpdate" hidden>立即更新</button>
       </div>
@@ -1281,7 +1386,7 @@
         );
         parent.append(detail);
       }
-      const panelVersion = "0.7.3";
+      const panelVersion = "0.7.4";
       let localVersion = panelVersion;
       let lanVersion, offeredUpdate;
       let updates = { status: "idle", autoInstall: false };
@@ -1324,14 +1429,16 @@
           : updateResult || (offeredUpdate && updateBusy()
             ? updates.autoInstall ? "有任务正在执行，结束后自动更新" : "有任务正在执行，结束后可更新"
             : offeredUpdate ? "发现新版 " + offeredUpdate.version
-              : panelVersion !== localVersion ? "已安装 " + localVersion + "，请重新打开「协作任务」加载新版。"
+              : panelVersion !== localVersion ? "重开「协作任务」后生效"
                 : updates.status === "ok" ? "已是最新版本"
                 : updates.status === "error" ? "未能检查 GitHub 更新，可重试"
                   : updates.status === "disabled" ? "未配置 GitHub 更新来源" : "正在检查更新…");
-        $("updateChecked").textContent = "当前版本 " + localVersion + (updates.checkedAt
-          ? " · 上次检查 " + new Date(updates.checkedAt * 1000).toLocaleString("zh-CN", {
+        $("installedUpdateVersion").textContent = "当前版本 " + localVersion;
+        $("lastUpdateCheck").hidden = !updates.checkedAt;
+        $("lastUpdateCheck").textContent = updates.checkedAt
+          ? "上次检查 " + new Date(updates.checkedAt * 1000).toLocaleString("zh-CN", {
               month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
-            }) : "");
+            }) : "";
       }
 
       async function installUpdate(automatic) {
@@ -1347,9 +1454,8 @@
             updateResult = "有任务正在执行，安装已延后";
           } else {
             localVersion = result.version;
-            updateResult = (result.alreadyInstalled ? "已安装 " : "已更新到 ") + result.version
-              + (panelVersion === localVersion ? "。" : "，请重新打开「协作任务」加载新版。");
-            toast(updateResult);
+            updateResult = panelVersion === localVersion ? "已安装当前版本" : "重开「协作任务」后生效";
+            toast((result.alreadyInstalled ? "已安装 " : "已更新到 ") + result.version);
           }
         } catch (e) {
           autoRetryAt = Date.now() + 60000;

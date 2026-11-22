@@ -71,7 +71,7 @@ def session(cwd, env=None, flags=(), timeout=600):
             1,
             "initialize",
             {
-                "clientInfo": {"name": "lan-task-center", "version": "0.7.3"},
+                "clientInfo": {"name": "lan-task-center", "version": "0.7.4"},
                 "capabilities": {"experimentalApi": True},
             },
         )
