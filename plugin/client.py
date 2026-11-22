@@ -88,6 +88,10 @@ ACTIONS = {
 }
 
 
+class PeerAccessError(ValueError):
+    pass
+
+
 def native_file(script, *args):
     import subprocess
 
@@ -175,7 +179,8 @@ def local_action(action, args):
 
         receiver = (ROOT / "host.json").is_file()
         links = peers(ROOT)
-        if args.get("peer") == "outbox" or not receiver and not links:
+        peer = args.get("peer", "")
+        if peer == "outbox" or not receiver and not links:
             state = {"owner": False, "tasks": [], "draftScope": "outbox"}
         else:
             try:
@@ -184,11 +189,37 @@ def local_action(action, args):
                 if action == "state":
                     raise
                 state = {"syncError": str(exc)}
+                if peer in links and isinstance(exc, PeerAccessError):
+                    before_approval = links[peer].get("offered") and not links[
+                        peer
+                    ].get("mutual")
+                    state.update(
+                        canReapply=True,
+                        syncError="连接申请未通过或已过期。"
+                        if before_approval
+                        else "对方的发送授权已失效。",
+                    )
         state["receiver"] = receiver
         state["peers"] = [
-            {"id": key, "name": value["name"]} for key, value in links.items()
+            {
+                "id": key,
+                "name": value["name"],
+                "connected": value.get("mutual") is True,
+                "pending": bool(value.get("offered") and not value.get("mutual"))
+                or key == peer
+                and state.get("connection") == "pending",
+            }
+            for key, value in links.items()
         ]
         if action == "sync_state":
+            if receiver:
+                path = (ROOT / "tasks.sqlite").as_uri()
+                with closing(sqlite3.connect(path + "?mode=ro", uri=True)) as db:
+                    mode, count = db.execute(
+                        "SELECT mode,(SELECT count(*) FROM lan_requests WHERE created>?) FROM settings",
+                        (int(time.time()) - 3600,),
+                    ).fetchone()
+                state.update(receivingMode=mode, pendingDevices=count)
             updates = update_status(ROOT)
             state["updates"] = updates
             if updates.get("version"):
@@ -312,9 +343,8 @@ def request_lan(args):
     if known:
         try:
             state = api("sync_state", {"peer": pin}, links={pin: known})
-        except ValueError as exc:
-            if "授权已失效" not in str(exc):
-                raise
+        except PeerAccessError:
+            pass
         else:
             connection = state.get("connection", "ready")
             if known.get("mutual") or connection == "pending" and known.get("offered"):
@@ -428,7 +458,7 @@ def api(action, args, *, links=None):
         if res.status == 409 and action == "sync_state":
             return data
         if res.status == 403:
-            raise ValueError("连接申请未获批准或授权已失效，请重新连接。")
+            raise PeerAccessError("连接申请未获批准或授权已失效，请重新连接。")
         if res.status != 200:
             raise ValueError(data.get("error", "操作失败"))
         return data

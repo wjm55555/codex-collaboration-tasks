@@ -231,6 +231,7 @@ def dispatch(db, action, args, actor, sender):
         return package(ROOT)
     if action == "devices":
         return {
+            "defaultMode": db.execute("SELECT mode FROM settings").fetchone()[0],
             "devices": [
                 dict(row)
                 for row in db.execute(
@@ -276,7 +277,7 @@ def dispatch(db, action, args, actor, sender):
                 )
             if not existing:
                 db.execute(
-                    "INSERT INTO devices(id,name,digest,mode) VALUES(?,?,?,'manual')",
+                    "INSERT INTO devices(id,name,digest) VALUES(?,?,?)",
                     (request["id"], request["name"], digest),
                 )
         db.execute("DELETE FROM lan_requests WHERE id=?", (device,))
@@ -706,7 +707,7 @@ class Handler(BaseHTTPRequestHandler):
                         )
                         if accepted == digest:
                             db.execute(
-                                "INSERT INTO devices(id,name,digest,mode) VALUES(?,?,?,'manual')",
+                                "INSERT INTO devices(id,name,digest) VALUES(?,?,?)",
                                 (secrets.token_hex(12), config["name"], digest),
                             )
                         config["mutual"] = True
@@ -734,7 +735,7 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute("DELETE FROM pair_codes WHERE digest=?", (digest,))
                     credential = secrets.token_urlsafe(32)
                     db.execute(
-                        "INSERT INTO devices(id,name,digest,mode) VALUES(?,?,?,'manual')",
+                        "INSERT INTO devices(id,name,digest) VALUES(?,?,?)",
                         (
                             secrets.token_hex(12),
                             code_row[0],

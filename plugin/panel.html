@@ -497,6 +497,7 @@
       <div id="connection" class="errorbar" hidden>
         <span id="connectionText" role="status"></span>
         <button class="soft" id="retry">重新连接</button>
+        <button class="soft" id="reapply" hidden>重新申请</button>
       </div>
       <p class="error errorbar" role="alert" id="alert"></p>
       <div class="shell" id="taskShell">
@@ -551,7 +552,7 @@
         <span class="spacer"></span>
         <button type="button" class="ghost" id="closeDevices">关闭</button>
       </div>
-      <p class="notice">同意双向连接后，双方可以互发任务。新设备默认手动接单。协作者只能查看自己发布的任务。</p>
+      <p class="notice">同意双向连接后，双方可以互发任务。新设备使用本机的默认接单方式，已有的单独设置优先。</p>
       <div id="deviceList" class="device-list"></div>
       <div role="alert" class="error" id="deviceError"></div>
     </dialog>
@@ -634,6 +635,8 @@
         applyingState = false;
       let syncDelay = 1600;
       let mailbox = "inbox", outPeer = "", canReceive = true;
+      let pendingDevices = 0, receivingMode = "manual";
+      let reapplyPeer = "";
       let peers = [], peerList = "";
       const outPeerForView = () => mailbox === "outbox" ? outPeer : "";
       const viewPeer = () => mailbox === "outbox" ? outPeer || "outbox" : "";
@@ -780,17 +783,21 @@
         }
         return text;
       }
-      function connectionError(error) {
+      function connectionError(error, canReapply = false) {
         $("connectionText").textContent = messageFor(error);
+        $("retry").hidden = canReapply;
+        $("reapply").hidden = !canReapply;
         $("connection").hidden = false;
         if (screen === "initial") $("detail").textContent = "正在等待连接。";
       }
-      function addDevice() {
+      function addDevice(peer = "") {
+        reapplyPeer = peer;
         $("addPeerDialog").showModal();
         $("searchLan").click();
       }
       $("closeAddPeer").onclick = () => $("addPeerDialog").close();
-      $("addPeer").onclick = addDevice;
+      $("addPeer").onclick = () => addDevice();
+      $("reapply").onclick = () => addDevice(outPeer);
       $("searchLan").onclick = () => act($("searchLan"), async () => {
         $("lanStatus").textContent = "正在搜索同一 Wi-Fi 上的设备…";
         $("lanDevices").replaceChildren();
@@ -800,6 +807,13 @@
           : "没有找到设备。请确认对方打开了协作任务，两台 Mac 在同一个可互访的 Wi-Fi。";
         for (const device of devices) {
           const row = el("div", "line device-row");
+          row.append(el("strong", "", device.name));
+          const known = peers.find((peer) => peer.id === device.pin);
+          if (reapplyPeer !== device.pin && (known?.connected || known?.pending)) {
+            row.append(el("span", "notice", known.connected ? "已连接" : "等待同意"));
+            $("lanDevices").append(row);
+            continue;
+          }
           const connectDevice = button("申请双向连接", "soft", async () => {
             const result = await call("request_lan", { endpoint: device.endpoint, pin: device.pin });
             $("addPeerDialog").close();
@@ -814,7 +828,7 @@
             toast(result.connection === "ready" ? "设备已连接" : "已发送双向连接申请");
           });
           connectDevice.setAttribute("aria-label", "申请双向连接 " + device.name);
-          row.append(el("strong", "", device.name), connectDevice);
+          row.append(connectDevice);
           $("lanDevices").append(row);
         }
       });
@@ -927,7 +941,7 @@
             ? "正在提交…"
             : adding
               ? "正在添加附件…"
-              : options.hint || "";
+              : reason || options.hint || "";
           send.title = reason || submitText + "（⌘ / Ctrl + Enter）";
           const fileKeys = d.files.map((f) => f.key).join(",");
           if (fileKeys === paintedFiles) return;
@@ -1267,7 +1281,7 @@
         );
         parent.append(detail);
       }
-      let localVersion = "0.7.1";
+      let localVersion = "0.7.2";
       let lanVersion, githubVersion, offeredUpdate;
       let updates = { status: "idle", autoInstall: false };
       let installingUpdate = false, updateResult = "", autoRetryAt = 0;
@@ -1338,6 +1352,15 @@
           installUpdate(true);
       }
 
+      function paintReceiving() {
+        $("pendingDevices").hidden = !canReceive || !pendingDevices;
+        $("pendingDevices").textContent = "设备申请 (" + pendingDevices + ")";
+        $("gear").hidden = !canReceive;
+        const label = receivingMode === "auto" ? "默认自动接单" : "默认手动接单";
+        if ($("mode").textContent !== label)
+          $("mode").replaceChildren(icon("sliders"), document.createTextNode(label), icon("down"));
+      }
+
       function paint(listOnly = false) {
         $("taskShell").hidden = false;
         $("inboxTab").hidden = !canReceive;
@@ -1348,25 +1371,20 @@
         if ($("outPeer").dataset.list !== peerList) {
           $("outPeer").dataset.list = peerList;
           $("outPeer").replaceChildren(...peers.map((peer) => {
-            const option = el("option", "", peer.name);
+            const label = peer.name.length > 19
+              ? peer.name.slice(0, 10) + "…" + peer.name.slice(-7)
+              : peer.name;
+            const option = el("option", "", peer.pending ? label + "（待同意）" : label);
             option.value = peer.id;
+            option.title = peer.name;
             return option;
           }));
         }
         $("outPeer").value = outPeer;
-        $("pendingDevices").hidden = !data.owner || !data.pendingDevices;
-        $("pendingDevices").textContent = "设备申请 (" + (data.pendingDevices || 0) + ")";
-        $("gear").hidden = !data.owner;
+        $("outPeer").title = peers.find((peer) => peer.id === outPeer)?.name || "";
         $("filter").hidden = !data.owner;
         $("refresh").hidden = false;
         $("new").hidden = screen === "new";
-        $("mode").replaceChildren(
-          icon("sliders"),
-          document.createTextNode(
-            data.mode === "auto" ? "自动接单" : "手动接单",
-          ),
-          icon("down"),
-        );
         $("filter").setAttribute("aria-pressed", String(onlyPending));
         const tasks = data.tasks.filter((t) => !onlyPending || attention(t));
         const nav = $("list");
@@ -1422,13 +1440,14 @@
           picker.append(el("option", "", "选择接收设备"));
           picker.options[0].value = "";
           for (const peer of [...peers, ...(canReceive ? [{ id: "local", name: "我自己（本机）" }] : [])]) {
-            const option = el("option", "", peer.name);
+            const option = el("option", "", peer.pending ? peer.name + "（等待同意）" : peer.name);
             option.value = peer.id;
+            option.disabled = Boolean(peer.pending);
             picker.append(option);
           }
           picker.value = d.peer ?? outPeerForView();
           d.peer = picker.value;
-          recipient.append(label, picker, button("添加设备", "ghost", addDevice));
+          recipient.append(label, picker, button("添加设备", "ghost", () => addDevice()));
           pane.append(recipient);
           const section = el("div", "message");
           pane.append(section);
@@ -1454,7 +1473,8 @@
             },
             "描述你希望完成的工作…",
             {
-              unavailable: () => d.peer ? "" : "请选择接收设备",
+              unavailable: () => !d.peer ? "请选择接收设备"
+                : peers.find((peer) => peer.id === d.peer)?.pending ? "对方同意连接后即可发布" : "",
               hint: "可添加文件或粘贴截图，最多 8 个文件，共 16 MiB。",
             },
           );
@@ -1463,6 +1483,7 @@
             edited(d);
             compose.update();
           };
+          pane.append(el("p", "notice", "草稿在当前标签页刷新后保留，关闭标签页会清除草稿。"));
           return;
         }
         const t = data.tasks.find((o) => o.id === chosen);
@@ -1629,12 +1650,21 @@
           );
           promptEditor.input.id = "dispatch-prompt";
           questionForm(edit, t);
-          edit.append(
-            button("拒绝此任务", "ghost", async () => {
+          const rejection = el("div", "actions");
+          const decline = button("拒绝此任务", "ghost", () => {
+            const cancel = button("取消", "soft", () => {
+              rejection.replaceChildren(decline);
+              decline.focus();
+            });
+            const confirm = button("确认拒绝", "ghost", async () => {
               const r = await call("decline", { id: t.id });
               await submitted(t, r, key, "已拒绝此任务");
-            }),
-          );
+            });
+            rejection.replaceChildren(el("span", "hint", "拒绝后，本次任务将结束。"), cancel, confirm);
+            cancel.focus();
+          });
+          rejection.append(decline);
+          edit.append(rejection);
           pane.append(edit);
         } else if (data.owner && t.status === "review") {
           const key = "deliver" + t.id + ":" + String(t.turn || ""),
@@ -1758,6 +1788,12 @@
         githubVersion = v.githubVersion;
         canReceive = v.receiver ?? canReceive;
         peers = v.peers ?? peers;
+        const requestsChanged = (v.pendingDevices ?? pendingDevices) !== pendingDevices;
+        pendingDevices = v.pendingDevices ?? pendingDevices;
+        receivingMode = v.receivingMode ?? v.mode ?? receivingMode;
+        paintReceiving();
+        if (requestsChanged && $("deviceDialog").open)
+          renderDevices().catch((e) => { $("deviceError").textContent = messageFor(e); });
         if (!canReceive && !target) return showMailbox("outbox");
         if (target === "outbox" && peers.length) {
           outPeer = peers[0].id;
@@ -1766,11 +1802,10 @@
         const nextPeers = JSON.stringify(peers);
         const peersChanged = nextPeers !== peerList;
         peerList = nextPeers;
-        if (v.syncError) connectionError(Error(v.syncError));
+        if (v.syncError) connectionError(Error(v.syncError), v.canReapply);
         if (!v.unchanged) {
           const scope = target ? "outbox/" + target : v.draftScope || "inbox";
           const restored = openDrafts(scope);
-          const requestsChanged = data.pendingDevices !== v.pendingDevices;
           const oldChosen = chosen;
           const oldTask = data.tasks.find((t) => t.id === chosen);
           data = { owner: !target && canReceive, tasks: [], ...v };
@@ -1792,8 +1827,6 @@
             );
             paint(!!signature && !force && !peersChanged && sameDetail && (screen === "new" || !!chosen));
             signature = sig;
-            if (requestsChanged && $("deviceDialog").open)
-              renderDevices().catch((e) => { $("deviceError").textContent = messageFor(e); });
           }
         } else if (peersChanged) {
           paint(screen !== "new");
@@ -1886,21 +1919,21 @@
         $("mode").setAttribute("aria-expanded", "true");
         m.replaceChildren();
         for (const [key, title, desc] of [
-          ["manual", "手动接单", "选择对话，编辑提示词后发送。"],
-          ["auto", "自动接单", "新任务在独立对话中自动执行并发回结果。"],
+          ["manual", "默认手动接单", "接单时选择对话，并可编辑提示词。"],
+          ["auto", "默认自动接单", "使用默认设置的设备发来任务时，自动执行并发回结果。"],
         ]) {
           const b = button("", "", async () => {
             await call("set_mode", { mode: key });
             closeMenu(true);
-            data.mode = key;
-            paint();
-            await refreshVisible();
+            receivingMode = key;
+            paintReceiving();
+            await refresh();
             toast("已切换为" + title);
           });
-          b.setAttribute("aria-pressed", String(data.mode === key));
+          b.setAttribute("aria-pressed", String(receivingMode === key));
           b.append(
             el("b", "", title),
-            el("b", "modecheck", data.mode === key ? "✓" : ""),
+            el("b", "modecheck", receivingMode === key ? "✓" : ""),
             el("span", "", desc),
           );
           m.append(b);
@@ -1911,12 +1944,13 @@
       async function openDevices() {
         closeMenu();
         $("deviceError").textContent = "";
+        $("deviceList").replaceChildren(el("p", "notice", "正在读取设备权限…"));
         $("deviceDialog").showModal();
         await renderDevices();
       }
       $("pendingDevices").onclick = () => act($("pendingDevices"), openDevices);
       async function renderDevices() {
-        const { devices, requests } = await call("devices");
+        const { devices, requests, defaultMode } = await call("devices");
         const list = $("deviceList");
         list.replaceChildren();
         for (const request of requests || []) {
@@ -1940,7 +1974,8 @@
           const row = el("div", "line device-row");
           const mode = el("select");
           mode.setAttribute("aria-label", device.name + "的接单方式");
-          for (const [value, label] of [["manual", "手动接单"], ["auto", "自动接单"], ["inherit", "使用默认方式"]]) {
+          const inheritedMode = (defaultMode ?? receivingMode) === "auto" ? "自动接单" : "手动接单";
+          for (const [value, label] of [["inherit", "使用默认（" + inheritedMode + "）"], ["manual", "单独设为手动接单"], ["auto", "单独设为自动接单"]]) {
             const option = el("option", "", label);
             option.value = value;
             mode.append(option);
@@ -1958,6 +1993,8 @@
           const revoke = button("撤销", "ghost", async () => {
             if (revoke.textContent === "撤销") {
               revoke.textContent = "确认撤销";
+              const notice = el("p", "notice", "对方将无法查看发给你的旧任务，重新授权后可以发送新任务。");
+              list.insertBefore(notice, row.nextSibling);
               return;
             }
             await call("revoke_device", { device: device.id });
@@ -2014,7 +2051,7 @@
           if (embedded) {
             const r = await rpc("ui/initialize", {
               protocolVersion: "2026-01-26",
-              appInfo: { name: "协作任务", version: "0.7.1" },
+              appInfo: { name: "协作任务", version: "0.7.2" },
               appCapabilities: {
                 availableDisplayModes: ["fullscreen", "inline"],
               },
