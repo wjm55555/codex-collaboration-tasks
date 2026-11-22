@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "task-center": {
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "exec /usr/bin/python3 -B \"$HOME/Library/Application Support/LAN Task Center/client.py\" mcp"
+      ],
+      "startup_timeout_sec": 15,
+      "tool_timeout_sec": 180
+    }
+  }
+}

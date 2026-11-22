@@ -1,0 +1,1 @@
+{"name":"lan-task-center","interface":{"displayName":"局域网协作"},"plugins":[{"name":"task-center","source":{"source":"local","path":"./plugin"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Productivity"}]}

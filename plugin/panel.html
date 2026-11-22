@@ -1,0 +1,1883 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>协作任务</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --canvas: var(--color-background-primary, light-dark(#fff, #212121));
+        --side: var(--color-background-secondary, light-dark(#f8f8f7, #1c1c1c));
+        --surface: var(--color-background-elevated-secondary, light-dark(#fff, #2a2a2a));
+        --ink: var(--color-text-primary, light-dark(#262624, #f1f1ed));
+        --sub: var(--color-text-secondary, light-dark(#5c5c59, #b9b9b5));
+        --faint: var(--color-text-tertiary, light-dark(#676763, #aaa9a6));
+        --stroke: var(--color-border-tertiary, light-dark(#e4e4e0, #3c3c39));
+        --control: var(--color-border-secondary, light-dark(#cececa, #565652));
+        --hover: color-mix(in srgb, var(--ink) 5%, var(--side));
+        --selected: color-mix(in srgb, var(--ink) 8%, var(--side));
+        --green: light-dark(#39704f, #8bb99a);
+        --amber: light-dark(#95671b, #d8b46f);
+        --red: var(--color-text-danger, light-dark(#a83931, #f4a09c));
+        font: 14px/1.55 var(--font-sans, -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", sans-serif);
+        color: var(--ink);
+        background: var(--canvas);
+        -webkit-font-smoothing: antialiased;
+      }
+      * { box-sizing: border-box; }
+      body, h1, h2, h3, p { margin: 0; }
+      button, input, textarea { font: inherit; color: inherit; }
+      button { cursor: pointer; border: 0; background: none; }
+      button:disabled { cursor: default; opacity: .45; }
+      :is(button, a, summary, input, textarea):focus-visible {
+        outline: 2px solid var(--sub);
+        outline-offset: 2px;
+      }
+      svg { display: block; width: 17px; height: 17px; flex: none; }
+      [hidden] { display: none !important; }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      .frame {
+        display: flex;
+        flex-direction: column;
+        height: 100dvh;
+        min-height: 0;
+        margin: auto;
+      }
+      .top {
+        position: relative;
+        z-index: 6;
+        display: flex;
+        align-items: center;
+        flex: none;
+        gap: 9px;
+        min-height: 56px;
+        padding: 8px clamp(16px, 2vw, 30px);
+        border-bottom: 1px solid var(--stroke);
+      }
+      .top h1 {
+        white-space: nowrap;
+        font-size: 16px;
+        letter-spacing: -.025em;
+        font-weight: 600;
+      }
+      #updatePlugin { font-size: 12px; }
+      .mark { display: block; width: 26px; height: 26px; flex: none; }
+      .spacer { flex: 1; }
+      .soft, .solid, .ghost, .chip, .filter, .pick {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-height: 32px;
+        max-width: 100%;
+        padding: 5px 11px;
+        border-radius: 9px;
+        font-size: 13px;
+        line-height: 1.4;
+        white-space: nowrap;
+      }
+      .soft, .pick {
+        border: 1px solid var(--stroke);
+        background: var(--surface);
+      }
+      .ghost, .filter { color: var(--sub); }
+      :is(.ghost, .soft, .filter, .pick):hover { background: var(--hover); }
+      .solid {
+        border: 1px solid transparent;
+        background: var(--ink);
+        color: var(--canvas);
+        font-weight: 560;
+      }
+      .solid:not(:disabled):hover { background: color-mix(in srgb, var(--ink) 87%, var(--canvas)); }
+      :is(.solid, .soft, .ghost, .pick) svg { width: 15px; height: 15px; }
+      .gear { position: relative; }
+      .menu, .results {
+        border: 1px solid var(--stroke);
+        border-radius: 13px;
+        background: var(--surface);
+        box-shadow: 0 5px 22px #0002;
+        padding: 5px;
+        z-index: 5;
+      }
+      .menu { position: absolute; top: 39px; right: 0; width: 235px; }
+      .menu button, .results button {
+        display: block;
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 8px;
+        text-align: left;
+        overflow-wrap: anywhere;
+      }
+      :is(.menu, .results) button:hover { background: var(--hover); }
+      .menu button span, .results small {
+        display: block;
+        margin-top: 2px;
+        color: var(--sub);
+        font-size: 12px;
+      }
+      .menu b { font-weight: 590; }
+      .modecheck { float: right; }
+      dialog {
+        color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--stroke);
+        border-radius: 16px;
+        padding: 18px;
+        width: min(460px, calc(100% - 24px));
+        max-height: calc(100% - 24px);
+      }
+      dialog::backdrop { background: #0005; }
+      dialog h2 { margin: 0; font-size: 17px; }
+      dialog .line { align-items: center; gap: 8px; flex-wrap: wrap; }
+      dialog .device-list { display: grid; gap: 6px; margin: 12px 0; }
+      dialog .device-row { padding: 8px 0; border-bottom: 1px solid var(--stroke); }
+      dialog .device-row strong { flex: 1; overflow-wrap: anywhere; }
+      .lan-connect { margin: 24px auto; padding: 0 16px; width: min(100%, 480px); }
+      .lan-connect .device-row { gap: 8px; align-items: center; }
+      .lan-connect .device-row strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+      dialog input, dialog select {
+        min-height: 32px;
+        min-width: 0;
+        border: 1px solid var(--stroke);
+        border-radius: 8px;
+        padding: 4px 8px;
+        color: var(--ink);
+        background: var(--canvas);
+      }
+      dialog .notice { margin: 8px 0; }
+      .shell {
+        display: grid;
+        grid-template-columns: clamp(225px, 24.5vw, 290px) minmax(0, 1fr);
+        flex: 1;
+        min-height: 0;
+      }
+      aside {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+        padding: 19px 10px 0;
+        background: var(--side);
+        border-right: 1px solid var(--stroke);
+      }
+      .railhead {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0 6px 12px 9px;
+      }
+      .railhead h2 {
+        margin-right: auto;
+        color: var(--sub);
+        font-size: 13px;
+        font-weight: 590;
+        white-space: nowrap;
+      }
+      #refresh, .filter {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        border-radius: 7px;
+        color: var(--sub);
+      }
+      #refresh { width: 28px; padding: 5px; }
+      #refresh svg { width: 15px; height: 15px; }
+      #refresh:hover { background: var(--hover); }
+      .filter { padding: 3px 8px; font-size: 12px; }
+      .filter[aria-pressed="true"] { background: var(--selected); color: var(--ink); }
+      #list {
+        min-height: 0;
+        overflow: auto;
+        overscroll-behavior: contain;
+        padding: 1px 1px 24px;
+      }
+      .item {
+        display: block;
+        width: 100%;
+        margin-bottom: 3px;
+        padding: 10px 11px;
+        border-radius: 9px;
+        text-align: left;
+      }
+      .item:hover { background: var(--hover); }
+      .item[aria-current="true"] { background: var(--selected); }
+      .item:focus-visible { outline-offset: -2px; }
+      .item strong {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        font-size: 14px;
+        line-height: 1.5;
+        font-weight: 450;
+        overflow-wrap: anywhere;
+      }
+      .item[aria-current="true"] strong { font-weight: 590; }
+      .item .line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        margin-top: 6px;
+        color: var(--faint);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      .dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        margin-right: 5px;
+        border-radius: 50%;
+        background: var(--faint);
+        vertical-align: 1px;
+      }
+      .dot.done { background: var(--green); }
+      .dot.pending, .dot.review, .dot.waiting { background: var(--amber); }
+      .dot.failed { background: var(--red); }
+      .blankrail { padding: 12px 10px; color: var(--sub); font-size: 13px; }
+      .content {
+        min-height: 0;
+        min-width: 0;
+        overflow: auto;
+        overscroll-behavior: contain;
+        scroll-padding-block-end: clamp(80px, 18vh, 128px);
+        padding: clamp(32px, 5vw, 64px) clamp(24px, 5vw, 72px) clamp(100px, 20vh, 160px);
+      }
+      .sheet { width: 100%; max-width: 720px; margin: 0 auto; }
+      .over {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 11px;
+        color: var(--sub);
+        font-size: 12px;
+      }
+      .over svg { width: 14px; height: 14px; }
+      .over > .ghost { padding: 3px 7px; min-height: 26px; font-size: 12px; }
+      .sheet h2 {
+        font-size: clamp(21px, 2.1vw, 27px);
+        letter-spacing: -.032em;
+        line-height: 1.42;
+        font-weight: 610;
+        overflow-wrap: anywhere;
+      }
+      .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .bodytext { margin-top: 14px; }
+      .message { margin: 23px 0; }
+      .message h3, .editor label, .label {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--sub);
+        font-size: 13px;
+        font-weight: 550;
+      }
+      .message p { line-height: 1.72; }
+      .editor { margin-top: 25px; padding-top: 22px; border-top: 1px solid var(--stroke); }
+      .editor h3 { margin-bottom: 8px; font-size: 16px; font-weight: 590; }
+      .composer {
+        padding: 11px 12px 9px;
+        border: 1px solid var(--control);
+        border-radius: 17px;
+        background: var(--surface);
+        box-shadow: 0 2px 5px #00000005;
+      }
+      .composer:focus-within { border-color: var(--faint); }
+      .composer.drag { outline: 2px dashed var(--sub); outline-offset: 2px; }
+      textarea {
+        display: block;
+        width: 100%;
+        min-height: 90px;
+        padding: 3px 3px 7px;
+        resize: vertical;
+        border: 0;
+        background: transparent;
+        font-size: 15px;
+        line-height: 1.6;
+      }
+      textarea::placeholder, input::placeholder { color: var(--faint); opacity: 1; }
+      .composer textarea:focus-visible { outline: 0; }
+      .controls, .chips, .actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+      .controls { margin-top: 8px; }
+      .controls .ghost { padding: 5px 7px; }
+      .controls .solid { border-radius: 10px; }
+      .chips:not(:empty) { margin: 12px 0; }
+      .chip, .checkfile {
+        border: 1px solid var(--stroke);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+      .chip {
+        justify-content: flex-start;
+        min-width: 0;
+        min-height: 30px;
+        max-width: 100%;
+        padding: 4px 8px;
+        font-size: 12px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      .file-name { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chip:has(.file-name) { max-width: min(100%, 355px); }
+      button.chip:hover { background: var(--hover); }
+      .chip svg { width: 14px; height: 14px; color: var(--sub); }
+      .chip button { min-width: 22px; align-self: stretch; padding: 0 3px; color: var(--sub); }
+      .chip button:hover { background: var(--hover); border-radius: 6px; }
+      .checkfile { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; padding-right: 6px; }
+      .checkfile input, .choice input { flex: none; accent-color: var(--ink); }
+      .checkfile .chip { border: 0; }
+      .targetline { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 16px; }
+      .targetline > span { color: var(--sub); font-size: 13px; }
+      .pick {
+        justify-content: flex-start;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        color: var(--ink);
+      }
+      .pick svg:last-child:not(:first-child) { margin-left: 2px; color: var(--sub); }
+      .finder {
+        margin: -5px 0 16px;
+        padding: 6px;
+        border: 1px solid var(--control);
+        border-radius: 11px;
+        background: var(--surface);
+      }
+      .finder input {
+        width: 100%;
+        padding: 7px 9px;
+        border: 0;
+        border-radius: 6px;
+        background: var(--side);
+      }
+      .results { max-height: 208px; overflow: auto; border: 0; box-shadow: none; }
+      .choice { display: inline-flex; align-items: center; gap: 5px; margin: 0 10px 6px 0; font-size: 12px; overflow-wrap: anywhere; }
+      .hint, .notice, .compose-meta, .draft-note { margin: 9px 0; color: var(--sub); font-size: 12px; }
+      .compose-meta { display: block; margin: 7px 2px 10px; }
+      .compose-meta:empty { display: none; }
+      .question { display: inline-block; vertical-align: middle; }
+      .question[open] { display: block; }
+      .question[open] .composer { margin-top: 5px; }
+      :is(.question, .original) > summary {
+        min-height: 30px;
+        margin-left: -5px;
+        padding: 4px 7px;
+        list-style: none;
+      }
+      :is(.question, .original) > summary::-webkit-details-marker { display: none; }
+      :is(.question, .original) > summary::before {
+        content: "";
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border: solid currentColor;
+        border-width: 1px 1px 0 0;
+        transform: rotate(45deg);
+      }
+      :is(.question, .original)[open] > summary::before { transform: rotate(135deg); }
+      .question:not([open]) + .ghost { margin-inline-start: 4px; }
+      .original { margin: 8px 0; }
+      .error { color: var(--red); overflow-wrap: anywhere; }
+      .error:empty { display: none; }
+      .errorbar { flex: none; margin: 6px 20px; }
+      #connection { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 7px clamp(12px, 2vw, 30px); color: var(--sub); background: var(--side); border-bottom: 1px solid var(--stroke); font-size: 13px; }
+      #connectionText { overflow-wrap: anywhere; }
+      #connection button { flex: none; min-height: 28px; padding: 3px 9px; font-size: 12px; font-weight: 560; }
+      .empty {
+        min-height: 235px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        text-align: center;
+      }
+      .empty > svg {
+        width: 40px;
+        height: 40px;
+        padding: 9px;
+        margin-bottom: 4px;
+        border-radius: 12px;
+        background: var(--side);
+        color: var(--sub);
+      }
+      .empty h2 { font-size: 19px; }
+      .empty p { color: var(--sub); font-size: 13px; }
+      .back { display: none; }
+      .toast {
+        position: fixed;
+        bottom: 22px;
+        left: 50%;
+        z-index: 8;
+        max-width: calc(100% - 24px);
+        transform: translateX(-50%);
+        padding: 6px 13px;
+        border-radius: 18px;
+        color: var(--canvas);
+        background: var(--ink);
+        font-size: 13px;
+        text-align: center;
+        pointer-events: none;
+      }
+      details > summary { cursor: pointer; color: var(--sub); }
+      details > summary:hover { color: var(--ink); }
+      @media (max-width: 670px) {
+        .top { min-height: 52px; padding: 8px 12px; gap: 7px; }
+        .top .soft, .top .solid { min-height: 32px; padding: 5px 9px; }
+        .gear { position: static; }
+        .menu { top: calc(100% - 3px); right: 10px; max-width: calc(100vw - 20px); }
+        .shell { display: flex; flex-direction: column; }
+        aside, .content { flex: 1; min-height: 0; }
+        aside { padding: 15px 9px 0; border: 0; }
+        .content { padding: 18px 17px 100px; }
+        .frame[data-screen="list"] .content, .frame[data-screen="detail"] aside { display: none; }
+        .back { display: inline-flex; min-height: 29px; margin: -6px 0 13px -6px; padding: 4px 7px; font-size: 12px; }
+        .sheet h2 { font-size: 21px; }
+        .railhead h2 { font-size: 14px; }
+        .item { padding: 10px 12px; }
+      }
+      @media (max-width: 375px) {
+        .top { gap: 5px; padding-inline: 10px; }
+        .mark { display: none; }
+        .top h1 { font-size: 15px; }
+        .top .soft, .top .solid { padding-inline: 7px; font-size: 12px; }
+        .content { padding-inline: 14px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame" id="frame" data-screen="list">
+      <header class="top">
+        <img class="mark" alt="" width="26" height="26" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAEB0lEQVR42u2dP2sUQRjG7yPcR8gHSS0pz7QqLNhYmSIKGiQcJCAqJkQLiygXDyRgEhUCCYLkj42Q5ppopUllIZIIYhWQcR/ZgzDMXvb2dvedd/Y5eLq7m3ee38zsu7vzp9EY4XNy8qcZqxWrHWs3Vi+WCVy9pK7tpO7NRtWfpOC3NTA7q+BFqyrjj2l4qo5LARH/6VjS7WhyNsGrsaLMj2L9oqlDC55Fo5q/SCNH1mJe8zs0rzB12PK19IRkzKdh5SjKku3wglvuhXlsEACmmhWkqINusmhQNWq5APAOt8I7ZrZ+n3oBH6zJPMA7/0iZhsioyeFHehhKXizQDBm1mftL3xPU5DWit683GzRBVl4CeL/dMwsP35lbUy/M9WtLlQvlonzEUSsAH/c+i5k+CAbiCh7As6dbXhlvC/EFC8B388uE0PBh2Emr8Mztrll6vGlWnu9UJpSHctNiKno4EgfgGvNhwO6HQ3P09aeYUL4LBOINBgCyDJf5Xw6/i5rfF+JwQSgyOxIFgFTPrpx0y3f1BDtGxB0EAHv4QWvzyfy+7F5Q5DAkCsBuWbgA+ggAcdmxBgkAWYiPABAXARAAARAAARCAWgBra5tmevqemZy8asbHL4mp1bpipm7OmJcrG/UAsLW1I276IBhrr7fDBTA7e99L423dvTMfHgAt5meBoA4Ahp20ikbRDTM398gsL3crF8pF+WmxpQ1H6gC4xnxU/OCgZ87O/ooLcbhA4JqgHgCyHZf5p6e/vTC/L8TjguDKjlQBQKppV8qXlu/qCXasSFFVA7CHH7QyH83vy+4FrmFIFQC7ReHC5zMAxGfHHBQAZB8+A0B8BEAABFBrAMhGir7pWl3dyJT61h6Ay4CiNDFx+UIItQcAk8p8xoOeMCoAVS/lQwSgalpKaEOQuolZIV2EVU5NDCUNVTs5NwQAqqenhwBA9QKNUAGoWaIUGgB1i/TyANjfPTRv1j9lFr5fJgDVy1SHBfCqu5drwRx+VxYA1Qu1hwUwyqpFAigAwIP59Vzm43cEUACAo28/zJOFzf+GZhW+j98RQKDvhFUD0D4rAvGrBqB9XhDiVw1A+8w4xK9+vyCtc0OrHn44O9oS4g5mxyxt6wMQb3BblmmBIGV+7deIIS6JYafWqyRRPuKoOttRtWti3bat5Matwhu3cuti4a2LuXm38Obd3L5eePt6HuAgeYADjzARPsKEh/h4cpQVj7ESPMaKvUC49fMow4pzfx7mKabBh3nyONvSFfFAZzkt8khzOXXynivPnlB1y0+5JvDCnO+CGzWK+CTZEVPUIVLNC7OdnCBavGMefIebepNVAgg+wDv3YK0S4x0gmgmMdtLt6vB6s5fUtZ3UvTmKh/8AN02oChK0U3MAAAAASUVORK5CYII=" />
+        <h1>协作任务</h1>
+        <span class="spacer"></span>
+        <button type="button" class="soft" id="updatePlugin" hidden></button>
+        <button type="button" class="soft" id="pendingDevices" hidden></button>
+        <div class="gear" id="gear" hidden>
+          <button
+            id="mode"
+            class="soft"
+            aria-controls="menu"
+            aria-expanded="false"
+          ></button>
+          <div
+            class="menu"
+            id="menu"
+            role="group"
+            aria-label="接单方式"
+            hidden
+          ></div>
+        </div>
+        <button class="solid" id="new" hidden>
+          <span data-icon="plus"></span>新建任务
+        </button>
+      </header>
+      <div id="connection" class="errorbar" hidden>
+        <span id="connectionText" role="status"></span>
+        <button class="soft" id="retry">重新连接</button>
+      </div>
+      <p class="error errorbar" role="alert" id="alert"></p>
+      <section class="lan-connect" id="lanConnect" aria-labelledby="lanHeading" hidden>
+        <h2 id="lanHeading">连接同一 Wi-Fi 上的接收方</h2>
+        <p class="notice" id="lanStatus" role="status"></p>
+        <div id="lanDevices"></div>
+        <button type="button" id="searchLan" class="soft">重新搜索</button>
+      </section>
+      <div class="shell" id="taskShell">
+        <aside>
+          <div class="railhead">
+            <h2 id="railTitle">任务</h2>
+            <span class="spacer"></span>
+            <button
+              class="filter"
+              id="refresh"
+              aria-label="刷新任务"
+              title="刷新任务"
+              hidden
+            >
+              <span data-icon="refresh"></span>
+            </button>
+            <button class="filter" id="filter" aria-pressed="false" hidden>
+              待处理
+            </button>
+          </div>
+          <nav id="list" aria-label="任务列表"></nav>
+        </aside>
+        <main class="content">
+          <div class="sheet">
+            <button class="back ghost" id="back">‹ 返回列表</button>
+            <div id="detail">正在连接…</div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <dialog id="deviceDialog" aria-labelledby="deviceTitle">
+      <div class="line">
+        <h2 id="deviceTitle">设备权限</h2>
+        <span class="spacer"></span>
+        <button type="button" class="ghost" id="closeDevices">关闭</button>
+      </div>
+      <p class="notice">协作者只能查看自己发布的任务。新设备默认手动接单。</p>
+      <div id="deviceList" class="device-list"></div>
+      <div role="alert" class="error" id="deviceError"></div>
+    </dialog>
+    <div class="toast" role="status" id="toast" hidden></div>
+    <script type="module">
+      const $ = (id) => document.getElementById(id),
+        embedded = window.parent !== window;
+      const lines = {
+        refresh: '<path d="M20 11a8 8 0 1 0-2 6m2-11v5h-5"/>',
+
+        inbox:
+          '<path d="m3 12 3-7h12l3 7v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 13h5l2 3h4l2-3h5"/>',
+        plus: '<path d="M12 5v14M5 12h14"/>',
+        down: '<path d="m7 10 5 5 5-5"/>',
+        send: '<path d="M12 19V5m-6 6 6-6 6 6"/>',
+        clip: '<path d="m9 15 7-7a2.1 2.1 0 0 0-3-3l-8 8a4.2 4.2 0 0 0 6 6l8-8a6.1 6.1 0 0 0-8.6-8.6"/>',
+        chat: '<path d="M6 18 3 21V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2z"/>',
+        file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5"/>',
+        sliders:
+          '<path d="M3 7h6m4 0h8M3 17h11m4 0h3"/><circle cx="11" cy="7" r="2"/><circle cx="16" cy="17" r="2"/>',
+        user: '<circle cx="12" cy="8" r="3"/><path d="M5 20a7 7 0 0 1 14 0"/>',
+      };
+      function icon(key) {
+        const t = document.createElement("template");
+        t.innerHTML =
+          '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">' +
+          lines[key] +
+          "</svg>";
+        return t.content.firstChild;
+      }
+      document
+        .querySelectorAll("[data-icon]")
+        .forEach((el) => el.replaceChildren(icon(el.dataset.icon)));
+      function el(tag, cls, text) {
+        const n = document.createElement(tag);
+        if (cls) n.className = cls;
+        if (text !== undefined) n.textContent = text;
+        return n;
+      }
+      function button(text, cls, click, shape) {
+        const b = el("button", cls);
+        b.type = "button";
+        if (shape) b.append(icon(shape));
+        if (cls === "chip") {
+          b.title = text;
+          b.append(el("span", "file-name", text));
+        } else b.append(document.createTextNode(text));
+        b.onclick = () => act(b, click);
+        return b;
+      }
+      let seq = 0,
+        token = "",
+        data = { owner: false, tasks: [] },
+        screen = "initial",
+        chosen = null,
+        onlyPending = false,
+        refreshSeq = 0,
+        signature = "";
+      let disposed = false,
+        ready = false,
+        pageAway = false,
+        pollTimer,
+        applyingState = false;
+      let syncDelay = 1600;
+      const pending = new Map(),
+        drafts = new Map();
+      let draftScope = "";
+      function openDrafts(scope) {
+        if (draftScope === scope) return;
+        draftScope = scope;
+        drafts.clear();
+        if (!scope) return;
+        try {
+          const saved = JSON.parse(
+            sessionStorage.getItem("task-center-drafts:" + scope) || "null",
+          );
+          if (!saved) return;
+          for (const [key, d] of saved.entries) {
+            if (d.include) d.include = new Set(d.include);
+            drafts.set(key, d);
+          }
+          return saved.view;
+        } catch {
+          // An embedded view may disable web storage. Navigation still retains the in-memory draft.
+        }
+      }
+      function saveDrafts() {
+        if (!draftScope) return;
+        try {
+          const entries = [...drafts].filter(([, d]) => d.dirty);
+          const key = "task-center-drafts:" + draftScope;
+          if (entries.length)
+            sessionStorage.setItem(
+              key,
+              JSON.stringify(
+                {
+                  entries,
+                  view: { screen, chosen, layout: $("frame").dataset.screen },
+                },
+                (k, v) => (v instanceof Set ? [...v] : v),
+              ),
+            );
+          else sessionStorage.removeItem(key);
+        } catch {
+          // The active draft remains usable if the host denies storage or its quota is full.
+        }
+      }
+      function edited(d) {
+        d.dirty = true;
+        saveDrafts();
+      }
+      function dropDraft(key) {
+        drafts.delete(key);
+        saveDrafts();
+      }
+      const status = {
+        pending: "待接单",
+        queued: "已接单",
+        desktop_queued: "已排入目标对话",
+        running: "执行中",
+        review: "待发回",
+        done: "已完成",
+        declined: "已拒绝",
+        failed: "需处理",
+        waiting: "待补充",
+      };
+      if (!embedded) {
+        token =
+          location.hash.slice(1) ||
+          sessionStorage.getItem("task-center-session") ||
+          "";
+        if (token) {
+          sessionStorage.setItem("task-center-session", token);
+          history.replaceState(null, "", location.pathname);
+        }
+      }
+      function rpc(method, params, limit = 30000) {
+        if (disposed) return Promise.reject(Error("面板已关闭"));
+        const id = ++seq;
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            pending.delete(id);
+            reject(Error("操作超时，请重试"));
+          }, limit);
+          pending.set(id, { resolve, reject, timer });
+          parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        });
+      }
+      function theme(ctx) {
+        const vars = ctx?.styles?.variables || {};
+        for (const [k, v] of Object.entries(vars)) {
+          if (/^--(color-|font-)/.test(k) && typeof v === "string")
+            document.documentElement.style.setProperty(k, v);
+        }
+        if (ctx?.theme) document.documentElement.style.colorScheme = ctx.theme;
+      }
+      addEventListener("message", (e) => {
+        if (e.source !== parent || e.data?.jsonrpc !== "2.0") return;
+        const msg = e.data;
+        if (msg.method && msg.id !== undefined) {
+          let response;
+          if (msg.method === "ui/resource-teardown") {
+            disposed = true;
+            clearTimeout(pollTimer);
+            response = { result: {} };
+          } else if (msg.method === "ping") {
+            response = { result: {} };
+          } else {
+            response = { error: { code: -32601, message: "Unknown method" } };
+          }
+          // Reply to the host immediately, including while a tool call is pending.
+          e.source.postMessage(
+            { jsonrpc: "2.0", id: msg.id, ...response },
+            "*",
+          );
+          return;
+        }
+        if (e.data.method === "ui/notifications/host-context-changed") {
+          theme(e.data.params);
+          return;
+        }
+        const r = pending.get(e.data.id);
+        if (!r) return;
+        clearTimeout(r.timer);
+        pending.delete(e.data.id);
+        e.data.error
+          ? r.reject(Error(e.data.error.message))
+          : r.resolve(e.data.result);
+      });
+      function messageFor(error) {
+        const text = error?.message || String(error);
+        if (
+          /MCP app tool is no longer available|unknown MCP server|resources\/read|工具.*不可用/i.test(
+            text,
+          )
+        ) {
+          return "插件连接已断开。可重新连接，或从 Codex 左侧「…」重新打开协作任务。";
+        }
+        if (
+          /failed to fetch|network error|load failed|connection refused|timed? ?out|no route to host/i.test(
+            text,
+          )
+        ) {
+          return "连接不到接收端。请确认接收方已打开服务，两台 Mac 在同一个可互访的 Wi-Fi。";
+        }
+        return text;
+      }
+      function connectionError(error) {
+        const message = messageFor(error);
+        $("connectionText").textContent = message;
+        $("connection").hidden = false;
+        if (message.includes("授权已失效") || message.includes("配对邀请已失效")) {
+          $("connection").hidden = true;
+          showLanConnect("denied");
+        } else if (screen === "initial") {
+          $("detail").replaceChildren(el("p", "notice", "正在等待连接。"));
+          $("list").textContent = "暂时无法读取任务。";
+        }
+      }
+      function showLanConnect(state) {
+        if (screen === "connect" && data.connection === state) return;
+        data = { owner: false, tasks: [], connection: state };
+        signature = "";
+        chosen = null;
+        screen = "connect";
+        openDrafts("");
+        for (const id of ["taskShell", "gear", "new", "pendingDevices", "updatePlugin"]) $(id).hidden = true;
+        $("lanConnect").hidden = false;
+        $("lanDevices").replaceChildren();
+        $("searchLan").hidden = state === "pending";
+        $("lanStatus").textContent =
+          state === "pending"
+            ? "连接申请已发出，等接收方同意后会自动进入协作任务。"
+            : state === "denied"
+              ? "连接申请未获批准或授权已失效。可选择接收方重新申请。"
+              : "正在查找同一 Wi-Fi 上的接收方。";
+        if (state === "unpaired") $("searchLan").click();
+      }
+      $("searchLan").onclick = () => act($("searchLan"), async () => {
+        $("lanStatus").textContent = "正在搜索…";
+        $("lanDevices").replaceChildren();
+        const { devices } = await call("discover_lan");
+        if (disposed || screen !== "connect" || data.connection === "pending") return;
+        $("lanStatus").textContent = devices.length
+          ? "选择你认识的接收方。首次连接需要对方同意。"
+          : "暂未找到接收方。请确认对方已安装接收端，两台 Mac 在同一个可互访的 Wi-Fi。";
+        for (const device of devices) {
+          const row = el("div", "line device-row");
+          const connectDevice = button("请求连接", "soft", async () => {
+            const r = await call("request_lan", { endpoint: device.endpoint, pin: device.pin });
+            showLanConnect(r.connection);
+            await refreshVisible();
+          });
+          connectDevice.setAttribute("aria-label", "请求连接 " + device.name);
+          row.append(el("strong", "", device.name), connectDevice);
+          $("lanDevices").append(row);
+        }
+      });
+      async function call(name, args = {}) {
+        if (embedded) {
+          const r = await rpc(
+            "tools/call",
+            { name, arguments: args },
+            ["state", "sync_state"].includes(name) ? 9000 :
+              ["pick_files", "save_file"].includes(name) ? 180000 : 60000,
+          );
+          if (r.isError) throw Error(r.content?.[0]?.text || "操作失败");
+          return r.structuredContent || JSON.parse(r.content[0].text);
+        }
+        const r = await fetch("/api/" + name, {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(args),
+        });
+        const v = await r.json();
+        if (!r.ok) throw Error(v.error || "连接失败");
+        return v;
+      }
+      async function act(b, fn) {
+        b.disabled = true;
+        $($("deviceDialog").open ? "deviceError" : "alert").textContent = "";
+        try {
+          await fn();
+        } catch (e) {
+          $($("deviceDialog").open ? "deviceError" : "alert").textContent = messageFor(e);
+        } finally {
+          b.disabled = false;
+        }
+      }
+      let toastTimer;
+      function toast(msg) {
+        $("toast").textContent = msg;
+        $("toast").hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => ($("toast").hidden = true), 2200);
+      }
+      function chips(items, wrapper, remove) {
+        wrapper.replaceChildren(
+          ...items.map((f, i) => {
+            const n = el("span", "chip");
+            n.title = f.name;
+            n.append(icon("file"), el("span", "file-name", f.name));
+            const x = button("×", "", () => remove(i));
+            x.setAttribute("aria-label", "移除 " + f.name);
+            n.append(x);
+            return n;
+          }),
+        );
+      }
+      const fileLimit = 16 * 1024 * 1024;
+      async function stageBrowser(file) {
+        const encoded = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(",")[1]);
+          reader.onerror = () => reject(Error("文件读取失败，请重新选择。"));
+          reader.readAsDataURL(file);
+        });
+        return (await call("stage_upload", { name: file.name, data: encoded }))
+          .files;
+      }
+      function composer(
+        parent,
+        d,
+        label,
+        submitText,
+        submitFn,
+        placeholder,
+        options = {},
+      ) {
+        const compose = el("div", "composer"),
+          input = el("textarea"),
+          tray = el("div", "chips"),
+          controls = el("div", "controls"),
+          picker = el("input");
+        const help = el("small", "compose-meta");
+        let sending = false,
+          adding = false,
+          paintedFiles = "";
+        picker.type = "file";
+        picker.multiple = true;
+        picker.hidden = true;
+        input.setAttribute("aria-label", label);
+        input.maxLength = 48000;
+        input.placeholder = placeholder;
+        input.value = d.text;
+        const send = el("button", "solid");
+        send.type = "button";
+        send.append(icon("send"), document.createTextNode(submitText));
+        send.title = submitText + "（⌘ / Ctrl + Enter）";
+        const update = () => {
+          const reason =
+            options.unavailable?.() ||
+            (!d.text.trim() && (options.needsText || !d.files.length)
+              ? options.files === false || options.needsText
+                ? "请填写" + label
+                : "请填写内容或添加文件"
+              : "");
+          send.disabled = sending || adding || Boolean(reason);
+          help.textContent = sending
+            ? "正在提交…"
+            : adding
+              ? "正在添加附件…"
+              : options.hint || "";
+          send.title = reason || submitText + "（⌘ / Ctrl + Enter）";
+          const fileKeys = d.files.map((f) => f.key).join(",");
+          if (fileKeys === paintedFiles) return;
+          paintedFiles = fileKeys;
+          chips(d.files, tray, async (i) => {
+            const f = d.files[i];
+            await call("discard_file", { key: f.key });
+            d.files = d.files.filter((item) => item.key !== f.key);
+            edited(d);
+            update();
+          });
+        };
+        input.oninput = () => {
+          d.text = input.value;
+          edited(d);
+          update();
+        };
+        send.onclick = async () => {
+          if (send.disabled) return;
+          sending = true;
+          update();
+          $("alert").textContent = "";
+          try {
+            await submitFn();
+          } catch (e) {
+            $("alert").textContent = messageFor(e);
+          } finally {
+            sending = false;
+            update();
+          }
+        };
+        input.onkeydown = (e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) {
+            e.preventDefault();
+            send.click();
+          }
+        };
+        function fits(items) {
+          if (
+            d.files.length + items.length > 8 ||
+            [...d.files, ...items].reduce((n, f) => n + f.size, 0) > fileLimit
+          )
+            throw Error(
+              "这次提交最多 8 个文件，合计 16 MiB。请移除附件后重新选择。",
+            );
+        }
+        async function upload(list) {
+          if (!list.length || adding) return;
+          adding = true;
+          update();
+          $("alert").textContent = "";
+          try {
+            fits(list);
+            for (const f of list) {
+              d.files.push(...(await stageBrowser(f)));
+              edited(d);
+            }
+          } catch (e) {
+            $("alert").textContent = messageFor(e);
+          } finally {
+            adding = false;
+            update();
+          }
+        }
+        if (options.files !== false) {
+          const attach = button(
+            "添加附件",
+            "ghost",
+            async () => {
+              if (adding) return;
+              if (!embedded) {
+                picker.click();
+                return;
+              }
+              adding = true;
+              update();
+              try {
+                const picked = (await call("pick_files")).files;
+                try {
+                  fits(picked);
+                } catch (e) {
+                  await Promise.all(
+                    picked.map((f) => call("discard_file", { key: f.key })),
+                  );
+                  throw e;
+                }
+                d.files.push(...picked);
+                if (picked.length) edited(d);
+              } finally {
+                adding = false;
+                update();
+              }
+            },
+            "clip",
+          );
+          picker.onchange = () => {
+            upload([...picker.files]);
+            picker.value = "";
+          };
+          compose.ondragover = (e) => {
+            if (e.dataTransfer.types.includes("Files")) {
+              e.preventDefault();
+              compose.classList.add("drag");
+            }
+          };
+          compose.ondragleave = () => compose.classList.remove("drag");
+          compose.ondrop = (e) => {
+            e.preventDefault();
+            compose.classList.remove("drag");
+            upload([...e.dataTransfer.files]);
+          };
+          input.onpaste = (e) => {
+            if (e.clipboardData?.files.length) {
+              e.preventDefault();
+              upload([...e.clipboardData.files]);
+            }
+          };
+          controls.append(attach);
+        }
+        controls.append(el("span", "spacer"), send);
+        compose.append(input, tray, controls, picker);
+        parent.append(compose, help);
+        update();
+        return { input, update };
+      }
+      function draft(key, start) {
+        if (!drafts.has(key))
+          drafts.set(key, { text: start, base: start, files: [] });
+        const draft = drafts.get(key);
+        if (draft.base !== start) {
+          // A collaborator's answer can arrive after the owner edited a dispatch prompt.
+          if (!draft.dirty || draft.text === draft.base) draft.text = start;
+          else if (draft.base && start.startsWith(draft.base))
+            draft.text += start.slice(draft.base.length);
+          draft.base = start;
+        }
+        return draft;
+      }
+      function showNew() {
+        screen = "new";
+        document.querySelector("main.content").scrollTop = 0;
+        chosen = null;
+        $("frame").dataset.screen = "detail";
+        saveDrafts();
+        paint();
+      }
+      function select(id) {
+        screen = "task";
+        document.querySelector("main.content").scrollTop = 0;
+        chosen = id;
+        $("frame").dataset.screen = "detail";
+        saveDrafts();
+        paint();
+        const title = $("detail").querySelector("h2");
+        if (title) {
+          title.tabIndex = -1;
+          title.focus({ preventScroll: true });
+        }
+      }
+      function displayFiles(parent, task, files) {
+        if (!files.length) return;
+        const tray = el("div", "chips");
+        for (const f of files) {
+          const b = button(
+            f.name,
+            "chip",
+            async () => {
+              const r = await call("save_file", { id: task.id, slot: f.slot });
+              if (r.saved) toast("文件已保存");
+            },
+            "file",
+          );
+          b.title = "保存 " + f.name;
+          tray.append(b);
+        }
+        parent.append(tray);
+      }
+      function chatPicker(parent, d, onChange) {
+        const pick = el("button", "pick"),
+          box = el("div", "finder"),
+          input = el("input"),
+          results = el("div", "results");
+        box.hidden = true;
+        box.id = "chat-finder";
+        pick.type = "button";
+        pick.setAttribute("aria-controls", box.id);
+        const label = () => {
+          pick.replaceChildren(
+            icon("chat"),
+            document.createTextNode(d.chat?.name || "选择 Codex 对话"),
+            icon("down"),
+          );
+        };
+        const close = () => {
+          box.hidden = true;
+          pick.setAttribute("aria-expanded", "false");
+          pick.focus();
+        };
+        label();
+        pick.setAttribute("aria-expanded", "false");
+        input.type = "search";
+        input.placeholder = "搜索对话标题";
+        input.maxLength = 200;
+        input.setAttribute("aria-label", "搜索对话");
+        let serial = 0,
+          timer;
+        async function search() {
+          const n = ++serial;
+          results.textContent = "正在查找…";
+          try {
+            const v = await call("chats", { query: input.value });
+            if (n !== serial || !results.isConnected) return;
+            results.replaceChildren();
+            for (const c of v.chats) {
+              const b = button(c.name, "", () => {
+                d.chat = c;
+                edited(d);
+                label();
+                close();
+                onChange();
+              });
+              if (c.project) b.append(el("small", "", c.project));
+              results.append(b);
+            }
+            if (!v.chats.length)
+              results.textContent = input.value
+                ? "没有匹配的对话，试试其他关键词。"
+                : "没有可派送的对话，请先在 Codex 中开启一个对话。";
+          } catch (e) {
+            if (n === serial) {
+              results.replaceChildren(
+                el("p", "hint", messageFor(e)),
+                button("重新查找", "soft", search),
+              );
+            }
+          }
+        }
+        pick.onclick = () => {
+          if (!box.hidden) {
+            close();
+            return;
+          }
+          box.hidden = false;
+          pick.setAttribute("aria-expanded", "true");
+          input.focus();
+          search();
+        };
+        input.oninput = () => {
+          ++serial;
+          clearTimeout(timer);
+          timer = setTimeout(search, 180);
+        };
+        box.onkeydown = (e) => {
+          const buttons = [...results.querySelectorAll("button")],
+            idx = buttons.indexOf(document.activeElement);
+          if (e.key === "Escape") {
+            e.preventDefault();
+            close();
+          } else if (e.key === "ArrowDown" && buttons.length) {
+            e.preventDefault();
+            buttons[Math.min(idx + 1, buttons.length - 1)].focus();
+          } else if (e.key === "ArrowUp" && idx >= 0) {
+            e.preventDefault();
+            (buttons[idx - 1] || input).focus();
+          } else if (
+            e.key === "Enter" &&
+            document.activeElement === input &&
+            buttons.length === 1
+          ) {
+            e.preventDefault();
+            buttons[0].click();
+          }
+        };
+        box.append(input, results);
+        const line = el("div", "targetline");
+        line.append(el("span", "", "发送到"), pick);
+        parent.append(line, box);
+      }
+      function stamp(ts) {
+        const d = new Date(ts * 1000);
+        return d.toDateString() === new Date().toDateString()
+          ? d.toLocaleTimeString("zh-CN", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : d.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
+      }
+      const attention = (task) =>
+        ["pending", "failed", "review", "desktop_queued"].includes(
+          task.status,
+        ) ||
+        (task.status === "waiting" && task.canReply);
+      function stateName(t) {
+        if (t.status === "review" && !data.owner) return "待接收方发回";
+        if (t.status === "waiting")
+          return t.canReply ? "待我补充" : "待发布者补充";
+        return status[t.status] || t.status;
+      }
+      async function submitted(task, response, key, notice) {
+        if (key) dropDraft(key);
+        if (task) task.status = response.status;
+        else {
+          chosen = response.id;
+          screen = "task";
+          onlyPending = false;
+          $("frame").dataset.screen = "detail";
+        }
+        signature = "";
+        saveDrafts();
+        paint();
+        toast(notice);
+        // The mutation already succeeded. Reconnect only the list if this read fails.
+        try {
+          await refresh(true);
+        } catch (e) {
+          connectionError(e);
+        }
+      }
+      function questionForm(parent, t) {
+        const key = "ask" + t.id,
+          d = draft(key, ""),
+          detail = el("details", "question"),
+          heading = el("summary", "ghost", "请求补充");
+        if (d.dirty && d.text) detail.open = true;
+        detail.append(heading);
+        composer(
+          detail,
+          d,
+          "给发布者的问题",
+          "发送问题",
+          async () => {
+            const r = await call("ask", { id: t.id, text: d.text });
+            await submitted(t, r, key, "问题已发给发布者");
+          },
+          "需要对方补充哪些信息？",
+          { files: false, needsText: true, hint: "这条问题会发给发布者。" },
+        );
+        parent.append(detail);
+      }
+      let localVersion = "0.6.1";
+      let lanVersion, githubVersion;
+      function updateOffer() {
+        const later = (first, second) => {
+          const parts = first.split(".").map(Number);
+          const other = second.split(".").map(Number);
+          const difference = parts.findIndex((part, i) => part !== other[i]);
+          return difference >= 0 && parts[difference] > other[difference];
+        };
+        const lan = !data.owner && lanVersion && later(lanVersion, localVersion);
+        const github = githubVersion && later(githubVersion, localVersion);
+        const useGithub = github && (!lan || later(githubVersion, lanVersion));
+        const offer = $("updatePlugin");
+        offer.hidden = !lan && !github;
+        if (offer.disabled) return;
+        offer.dataset.source = useGithub ? "github" : "lan";
+        offer.textContent = offer.hidden ? "" : "更新到 " + (useGithub ? githubVersion : lanVersion);
+      }
+      function paint(listOnly = false) {
+        $("taskShell").hidden = false;
+        $("lanConnect").hidden = true;
+        $("pendingDevices").hidden = !data.owner || !data.pendingDevices;
+        $("pendingDevices").textContent = "设备申请 (" + (data.pendingDevices || 0) + ")";
+        $("gear").hidden = !data.owner;
+        $("filter").hidden = !data.owner;
+        $("refresh").hidden = false;
+        $("new").hidden = screen === "new";
+        $("railTitle").textContent = data.owner ? "收件箱" : "我发布的任务";
+        $("mode").replaceChildren(
+          icon("sliders"),
+          document.createTextNode(
+            data.mode === "auto" ? "自动接单" : "手动接单",
+          ),
+          icon("down"),
+        );
+        $("filter").setAttribute("aria-pressed", String(onlyPending));
+        const tasks = data.tasks.filter((t) => !onlyPending || attention(t));
+        const nav = $("list");
+        const prevFocus = nav.contains(document.activeElement)
+          ? document.activeElement.dataset.task
+          : null;
+        const rows = document.createDocumentFragment();
+        for (const t of tasks) {
+          const b = el("button", "item");
+          b.type = "button";
+          b.dataset.task = t.id;
+          b.setAttribute("aria-current", String(t.id === chosen));
+          b.onclick = () => select(t.id);
+          const summary = t.messages[0].text.split("\n")[0];
+          b.append(
+            el(
+              "strong",
+              "task-title",
+              summary.length > 140 ? summary.slice(0, 140) + "…" : summary,
+            ),
+          );
+          const line = el("span", "line"),
+            left = el("span", "task-state");
+          left.append(
+            el("i", "dot " + t.status),
+            document.createTextNode(stateName(t)),
+          );
+          line.append(left, el("span", "", stamp(t.created)));
+          b.append(line);
+          rows.append(b);
+        }
+        if (!tasks.length)
+          rows.append(
+            el("p", "blankrail", onlyPending ? "没有待处理任务" : "暂无任务"),
+          );
+        nav.replaceChildren(rows);
+        if (listOnly && prevFocus)
+          nav
+            .querySelector('[data-task="' + CSS.escape(prevFocus) + '"]')
+            ?.focus({ preventScroll: true });
+        if (listOnly) return;
+        const pane = $("detail");
+        pane.replaceChildren();
+        if (screen === "new") {
+          const d = draft("new", "");
+          pane.append(el("h2", "", "发布任务"));
+          const section = el("div", "message");
+          pane.append(section);
+          composer(
+            section,
+            d,
+            "任务内容",
+            "发布任务",
+            async () => {
+              const r = await call("publish", {
+                text: d.text,
+                files: d.files.map((f) => f.key),
+              });
+              await submitted(null, r, "new", "任务已发布");
+            },
+            "希望对方的 Codex 完成什么？",
+            { hint: "可添加文件或粘贴截图，最多 8 个文件，共 16 MiB。" },
+          );
+          return;
+        }
+        const t = data.tasks.find((o) => o.id === chosen);
+        if (!t) {
+          const empty = el("div", "empty");
+          empty.append(icon("inbox"));
+          if (onlyPending)
+            empty.append(
+              el("h2", "", "没有待处理任务"),
+              button("查看全部任务", "ghost", () => {
+                onlyPending = false;
+                chosen = data.tasks[0]?.id || null;
+                paint();
+              }),
+            );
+          else if (chosen)
+            empty.append(
+              el("h2", "", "正在同步任务"),
+              el("p", "", "任务已提交，正在读取最新记录。"),
+            );
+          else
+            empty.append(
+              el("h2", "", data.owner ? "收件箱已就绪" : "还没有发布任务"),
+              el(
+                "p",
+                "",
+                data.owner
+                  ? "协作者发来的任务会出现在这里。"
+                  : "点击「新建任务」开始发布。",
+              ),
+            );
+          pane.append(empty);
+          return;
+        }
+        const meta = el("div", "over");
+        meta.append(
+          icon("user"),
+          document.createTextNode(
+            t.sender + " · " + stamp(t.created) + " · " + stateName(t),
+          ),
+        );
+        pane.append(meta);
+        if (data.owner && t.destination && t.status !== "desktop_queued")
+          meta.append(
+            button(
+              "打开派送对话",
+              "ghost",
+              () => call("open_thread", { id: t.id }),
+              "chat",
+            ),
+          );
+        const first = t.messages[0].text.trim(),
+          line = first.split("\n")[0],
+          title = line.slice(0, 72),
+          remainder = first.slice(title.length).trimStart();
+        pane.append(el("h2", "task-title", title));
+        if (remainder) {
+          const body = el("p", "text bodytext task-request", remainder);
+          if (remainder.length > 280) {
+            const details = el("details", "original"),
+              summary = el("summary", "ghost", "展开完整请求");
+            details.append(summary, body);
+            pane.append(details);
+          } else pane.append(body);
+        }
+        const accepting =
+          data.owner && ["pending", "failed"].includes(t.status);
+        const messageFiles = (m, i) => {
+          if (Array.isArray(m.files))
+            return t.files.filter((f) => m.files.includes(f.slot));
+          return t.files.filter(
+            (f) =>
+              (i === 0 && f.kind === "request") ||
+              (i === t.messages.length - 1 && f.kind === "result"),
+          );
+        };
+        if (!accepting) displayFiles(pane, t, messageFiles(t.messages[0], 0));
+        for (const [i, m] of t.messages.entries()) {
+          if (i === 0) continue;
+          const block = el("div", "message");
+          block.append(el("h3", "", m.role), el("p", "text", m.text));
+          displayFiles(block, t, messageFiles(m, i));
+          pane.append(block);
+        }
+        if (accepting) {
+          const key = "accept" + t.id,
+            d = draft(key, t.prompt || first);
+          const selected =
+            t.selection ??
+            t.files
+              .filter((f) => f.kind === "request" || f.kind === "reply")
+              .map((f) => f.slot);
+          if (!d.include) d.include = new Set(selected);
+          if (d.baseSelection)
+            for (const slot of selected) {
+              if (!d.baseSelection.includes(slot)) d.include.add(slot);
+            }
+          d.baseSelection = selected;
+          const edit = el("section", "editor task-action");
+          if (t.error) edit.append(el("p", "error", t.error));
+          let promptEditor;
+          chatPicker(edit, d, () => promptEditor.update());
+          const attachable = t.files.filter((f) => f.kind !== "result");
+          if (attachable.length) {
+            const options = el("div", "chips");
+            for (const f of attachable) {
+              const group = el("span", "checkfile"),
+                c = el("input");
+              c.type = "checkbox";
+              c.checked = d.include.has(f.slot);
+              c.setAttribute("aria-label", "随提示词发送 " + f.name);
+              c.title = "随提示词发送";
+              c.onchange = () => {
+                if (c.checked) d.include.add(f.slot);
+                else d.include.delete(f.slot);
+                edited(d);
+              };
+              group.append(
+                button(
+                  f.name,
+                  "chip",
+                  () => call("save_file", { id: t.id, slot: f.slot }),
+                  "file",
+                ),
+                c,
+              );
+              options.append(group);
+            }
+            edit.append(el("span", "label", "随提示词发送的附件"), options);
+          }
+          const fieldLabel = el("label", "", "发给 Codex 的提示词");
+          fieldLabel.htmlFor = "dispatch-prompt";
+          edit.append(fieldLabel);
+          promptEditor = composer(
+            edit,
+            d,
+            "发给 Codex 的提示词",
+            "接单并发送",
+            async () => {
+              const r = await call("accept", {
+                id: t.id,
+                thread: d.chat.id,
+                prompt: d.text,
+                include: [...d.include],
+                files: d.files.map((f) => f.key),
+              });
+              await submitted(t, r, key, "已派送到所选对话");
+            },
+            "编辑本次要发送的提示词",
+            {
+              unavailable: () => (d.chat ? "" : "请先选择派送的对话"),
+              needsText: true,
+              hint: "修改后的提示词和新增附件仅发送到所选对话。",
+            },
+          );
+          promptEditor.input.id = "dispatch-prompt";
+          questionForm(edit, t);
+          edit.append(
+            button("拒绝此任务", "ghost", async () => {
+              const r = await call("decline", { id: t.id });
+              await submitted(t, r, key, "已拒绝此任务");
+            }),
+          );
+          pane.append(edit);
+        } else if (data.owner && t.status === "review") {
+          const key = "deliver" + t.id + ":" + String(t.turn || ""),
+            d = draft(key, t.draft),
+            edit = el("section", "editor task-action");
+          edit.append(el("h3", "", "发回给发布者"));
+          composer(
+            edit,
+            d,
+            "发回内容",
+            "发回结果",
+            async () => {
+              const r = await call("deliver", {
+                id: t.id,
+                text: d.text,
+                files: d.files.map((f) => f.key),
+              });
+              await submitted(t, r, key, "结果已发回");
+            },
+            "填写要公开的结果",
+            { hint: "点击「发回结果」后，发布者才能看到这段文字和所附文件。" },
+          );
+          questionForm(edit, t);
+          pane.append(edit);
+        } else if (t.status === "waiting" && t.canReply) {
+          const key = "reply" + t.id,
+            d = draft(key, ""),
+            edit = el("section", "editor task-action");
+          edit.append(el("h3", "", "补充说明"));
+          composer(
+            edit,
+            d,
+            "补充说明",
+            "发送补充",
+            async () => {
+              const r = await call("reply", {
+                id: t.id,
+                text: d.text,
+                files: d.files.map((f) => f.key),
+              });
+              await submitted(t, r, key, "补充内容已发送");
+            },
+            "回复接收方的问题，可附上相关文件。",
+          );
+          pane.append(edit);
+        } else if (data.owner && t.status === "desktop_queued") {
+          const section = el("section", "editor task-action");
+          section.append(
+            el("h3", "", "等待目标对话开始"),
+            el(
+              "p",
+              "hint",
+              "轮到这项任务时，Codex 会自动开始。你可以打开对话查看待发消息，也可以在开始前撤回改派。",
+            ),
+          );
+          const actions = el("div", "actions");
+          actions.append(
+            button(
+              "打开派送对话",
+              "soft",
+              () => call("open_thread", { id: t.id }),
+              "chat",
+            ),
+            button("撤回并改派", "ghost", async () => {
+              let result;
+              try {
+                result = await call("withdraw", { id: t.id });
+              } catch (e) {
+                // The original conversation may have started this task since the last refresh.
+                await refreshVisible();
+                throw e;
+              }
+              await submitted(t, result, null, "已撤回，可重新选择对话");
+            }),
+          );
+          section.append(actions);
+          pane.append(section);
+        } else {
+          const copy = {
+            pending: "等待接收方接单。",
+            queued: "任务已接单，正在等待开始。",
+            running: "Codex 正在处理这项任务。",
+            review: "Codex 已完成，等待接收方确认并发回结果。",
+            waiting: "问题已发送，等待发布者补充。",
+            failed: "执行遇到问题，等待接收方处理。",
+            declined: "接收方已拒绝这项任务。",
+          };
+          if (copy[t.status]) pane.append(el("p", "notice", copy[t.status]));
+        }
+      }
+      async function refresh(force = false) {
+        if (disposed) return;
+        const n = ++refreshSeq;
+        let v;
+        try {
+          v = await call("sync_state", { revision: force ? "" : data.revision || "" });
+        } catch (e) {
+          if (n === refreshSeq) throw e;
+          return;
+        }
+        if (disposed || n !== refreshSeq) return;
+        $("connection").hidden = true;
+        syncDelay = 1600;
+        githubVersion = v.githubVersion;
+        if (v.syncError) {
+          lanVersion = null;
+          connectionError(Error(v.syncError));
+          updateOffer();
+          return;
+        }
+        if (v.unchanged) {
+          updateOffer();
+          return;
+        }
+        if (v.connection) {
+          showLanConnect(v.connection);
+          lanVersion = null;
+          updateOffer();
+          return;
+        }
+        const requestsChanged = data.pendingDevices !== v.pendingDevices;
+        const sig = v.revision || JSON.stringify(v),
+          oldChosen = chosen;
+        const oldTask = data.tasks.find((t) => t.id === chosen),
+          changedIdentity =
+            data.draftScope !== v.draftScope || data.owner !== v.owner;
+        if (changedIdentity && screen !== "initial") {
+          screen = "initial";
+          chosen = null;
+          onlyPending = false;
+          $("frame").dataset.screen = "list";
+        }
+        const restored = openDrafts(v.draftScope || "");
+        data = v;
+        lanVersion = v.updateVersion;
+        updateOffer();
+        if (screen === "initial") {
+          screen =
+            restored?.screen || (!v.owner && !v.tasks.length ? "new" : "task");
+          chosen = restored?.chosen || null;
+          $("frame").dataset.screen =
+            restored?.layout || (screen === "new" ? "detail" : "list");
+        }
+        if (screen === "task") {
+          const visible = v.tasks.filter((t) => !onlyPending || attention(t));
+          if (!visible.some((t) => t.id === chosen))
+            chosen = visible[0]?.id || null;
+        }
+        if (sig !== signature || force) {
+          const sameDetail =
+            screen === "new" ||
+            (oldChosen === chosen &&
+              JSON.stringify(oldTask) ===
+                JSON.stringify(v.tasks.find((t) => t.id === chosen)));
+          const firstPaint = !signature;
+          signature = sig;
+          paint(!firstPaint && !force && sameDetail);
+          if (requestsChanged && $("deviceDialog").open) {
+            renderDevices().catch((e) => { $("deviceError").textContent = messageFor(e); });
+          }
+        }
+        scheduleRefresh();
+      }
+      $("updatePlugin").onclick = () => act($("updatePlugin"), async () => {
+        const button = $("updatePlugin");
+        const previous = button.textContent;
+        button.textContent = "正在更新…";
+        try {
+          const { version } = await call("apply_update", { source: button.dataset.source });
+          localVersion = version;
+          button.hidden = true;
+          toast("已更新到 " + version + "。重新打开面板即可使用新版。");
+        } finally {
+          button.textContent = previous;
+        }
+      });
+      $("new").onclick = () => {
+        showNew();
+        $("detail").querySelector("textarea")?.focus();
+      };
+      $("back").onclick = () => {
+        if (screen === "new") {
+          screen = "task";
+          chosen = data.tasks[0]?.id || null;
+          paint();
+        }
+        $("frame").dataset.screen = "list";
+        saveDrafts();
+        const row =
+          $("list").querySelector('[aria-current="true"]') ||
+          $("list").querySelector("button");
+        (row || $("refresh")).focus();
+      };
+      $("refresh").onclick = () =>
+        act($("refresh"), async () => {
+          try {
+            await refresh(true);
+            toast("任务已更新");
+          } catch (e) {
+            connectionError(e);
+          }
+        });
+      $("retry").onclick = () =>
+        act($("retry"), async () => {
+          if (!ready) await connect();
+          else await refreshVisible();
+        });
+      $("filter").onclick = () => {
+        onlyPending = !onlyPending;
+        screen = "task";
+        const visible = data.tasks.filter((t) => !onlyPending || attention(t));
+        if (!visible.some((t) => t.id === chosen))
+          chosen = visible[0]?.id || null;
+        paint();
+      };
+      function closeMenu(restore = false) {
+        $("menu").hidden = true;
+        $("mode").setAttribute("aria-expanded", "false");
+        if (restore) $("mode").focus();
+      }
+      $("mode").onclick = () => {
+        const m = $("menu");
+        if (!m.hidden) {
+          closeMenu(true);
+          return;
+        }
+        m.hidden = false;
+        $("mode").setAttribute("aria-expanded", "true");
+        m.replaceChildren();
+        for (const [key, title, desc] of [
+          ["manual", "手动接单", "选择对话，编辑提示词后发送。"],
+          ["auto", "自动接单", "新任务在独立对话中自动执行并发回结果。"],
+        ]) {
+          const b = button("", "", async () => {
+            await call("set_mode", { mode: key });
+            closeMenu(true);
+            data.mode = key;
+            paint();
+            await refreshVisible();
+            toast("已切换为" + title);
+          });
+          b.setAttribute("aria-pressed", String(data.mode === key));
+          b.append(
+            el("b", "", title),
+            el("b", "modecheck", data.mode === key ? "✓" : ""),
+            el("span", "", desc),
+          );
+          m.append(b);
+        }
+        m.append(button("设备权限", "", openDevices));
+        m.querySelector('[aria-pressed="true"]')?.focus();
+      };
+      async function openDevices() {
+        closeMenu();
+        $("deviceError").textContent = "";
+        $("deviceDialog").showModal();
+        await renderDevices();
+      }
+      $("pendingDevices").onclick = () => act($("pendingDevices"), openDevices);
+      async function renderDevices() {
+        const { devices, requests } = await call("devices");
+        const list = $("deviceList");
+        list.replaceChildren();
+        for (const request of requests || []) {
+          const row = el("div", "line device-row");
+          const decide = async (allow) => {
+            await call("decide_connection", { device: request.id, allow });
+            await renderDevices();
+            await refreshVisible();
+          };
+          row.append(
+            el("strong", "", request.name + " 请求连接"),
+            button("拒绝", "ghost", () => decide(false)),
+            button("同意", "solid", () => decide(true)),
+          );
+          list.append(row);
+        }
+        if (!devices.length && !requests?.length)
+          list.append(el("p", "notice", "暂无设备。协作者可以在同一 Wi-Fi 上找到你。"));
+        for (const device of devices) {
+          const row = el("div", "line device-row");
+          const mode = el("select");
+          mode.setAttribute("aria-label", device.name + "的接单方式");
+          for (const [value, label] of [["manual", "手动接单"], ["auto", "自动接单"], ["inherit", "使用默认方式"]]) {
+            const option = el("option", "", label);
+            option.value = value;
+            mode.append(option);
+          }
+          mode.value = device.mode;
+          mode.onchange = () => act(mode, async () => {
+            try {
+              await call("device_mode", { device: device.id, mode: mode.value });
+              device.mode = mode.value;
+            } catch (e) {
+              mode.value = device.mode;
+              throw e;
+            }
+          });
+          const revoke = button("撤销", "ghost", async () => {
+            if (revoke.textContent === "撤销") {
+              revoke.textContent = "确认撤销";
+              return;
+            }
+            await call("revoke_device", { device: device.id });
+            await renderDevices();
+          });
+          row.append(el("strong", "", device.name), mode, revoke);
+          list.append(row);
+        }
+      }
+      $("closeDevices").onclick = () => $("deviceDialog").close();
+      $("deviceDialog").onclose = () => $("mode").focus();
+      document.addEventListener("click", (e) => {
+        if (!$("gear").contains(e.target)) closeMenu();
+      });
+      window.addEventListener("focus", refreshVisible);
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !$("menu").hidden) {
+          e.preventDefault();
+          closeMenu(true);
+        }
+      });
+      function scheduleRefresh() {
+        clearTimeout(pollTimer);
+        if (!ready || disposed || pageAway || document.hidden) return;
+        pollTimer = setTimeout(refreshVisible, syncDelay);
+      }
+      async function refreshVisible() {
+        if (!ready || disposed || pageAway || document.hidden || applyingState) return;
+        applyingState = true;
+        try {
+          await refresh();
+        } catch (e) {
+          syncDelay = Math.min(syncDelay * 2, 15000);
+          if (!disposed) connectionError(e);
+        } finally {
+          applyingState = false;
+          scheduleRefresh();
+        }
+      }
+      document.addEventListener("visibilitychange", () => {
+        clearTimeout(pollTimer);
+        if (!document.hidden) refreshVisible();
+      });
+      window.addEventListener("pagehide", () => {
+        pageAway = true;
+        clearTimeout(pollTimer);
+      });
+      window.addEventListener("pageshow", (e) => {
+        pageAway = false;
+        if (e.persisted) refreshVisible();
+      });
+      async function connect() {
+        try {
+          if (embedded) {
+            const r = await rpc("ui/initialize", {
+              protocolVersion: "2026-01-26",
+              appInfo: { name: "协作任务", version: "0.6.1" },
+              appCapabilities: {
+                availableDisplayModes: ["fullscreen", "inline"],
+              },
+            });
+            parent.postMessage(
+              {
+                jsonrpc: "2.0",
+                method: "ui/notifications/initialized",
+                params: {},
+              },
+              "*",
+            );
+            theme(r?.hostContext);
+          }
+          ready = true;
+          await refreshVisible();
+        } catch (e) {
+          connectionError(e);
+        }
+      }
+      connect();
+    </script>
+  </body>
+</html>
