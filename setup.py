@@ -71,18 +71,20 @@ def install():
     ):
         dst = market / relative
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(BASE / relative, dst)
+        temp = dst.with_suffix(dst.suffix + ".new")
+        shutil.copyfile(BASE / relative, temp)
+        temp.replace(dst)
     modules = (
-        "client.py",
         "panel.html",
         "worker.py",
         "host.py",
         "relay.py",
         "lan.py",
         "release.py",
+        "client.py",
     )
     # Keep copies for older installations that start the MCP module from the marketplace.
-    for name in ("client.py", "panel.html", "lan.py", "release.py"):
+    for name in ("panel.html", "lan.py", "release.py", "client.py"):
         temp = plug / (name + ".new")
         shutil.copyfile(BASE / "plugin" / name, temp)
         temp.replace(plug / name)

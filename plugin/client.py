@@ -18,8 +18,8 @@ ROOT = Path(
         "TASK_CENTER_STATE", Path.home() / "Library/Application Support/LAN Task Center"
     )
 )
-# Keep this address stable across releases and already-open desktop sessions.
-URI = "ui://task-center/panel.html"
+# A reopened panel must fetch the HTML for the installed version.
+URI = f"ui://task-center/panel-{VERSION}.html"
 MIME = "text/html;profile=mcp-app"
 META = {
     "ui": {"resourceUri": URI},
@@ -148,7 +148,14 @@ def local_action(action, args):
             write_json(ROOT / "update-preferences.json", {"autoInstall": enabled})
         return update_status(ROOT, force=action == "check_updates")
     if action == "apply_update":
-        from release import apply_update, auto_enabled, github_package, receiver_busy
+        from release import (
+            apply_update,
+            auto_enabled,
+            github_package,
+            receiver_busy,
+            update_status,
+            version_tuple,
+        )
 
         source = args.get("source")
         if source not in ("lan", "github"):
@@ -157,10 +164,20 @@ def local_action(action, args):
             raise ValueError("接收端请通过 GitHub 或最新安装包更新")
         if args.get("automatic") is True and not auto_enabled(ROOT):
             raise ValueError("自动安装更新未开启")
+        if source == "github":
+            status = update_status(ROOT)
+            version = status.get("version")
+            installed = status["installedVersion"]
+            if not version:
+                if status["status"] == "checking":
+                    raise ValueError("正在检查 GitHub 上的新版，请稍后重试")
+                raise ValueError("未能读取 GitHub 版本，请重新检查更新")
+            if version_tuple(version) <= version_tuple(installed):
+                return {"version": installed, "alreadyInstalled": True}
         if receiver_busy(ROOT):
             return {"waiting": True}
         update = (
-            github_package(ROOT) if source == "github" else api("update_package", {})
+            github_package(version) if source == "github" else api("update_package", {})
         )
         return apply_update(ROOT, update)
     if action == "discover_lan":
@@ -551,10 +568,16 @@ def rpc(method, params):
     if method == "resources/templates/list":
         return {"resourceTemplates": []}
     # The desktop may retain an earlier entrypoint until its catalog refreshes.
-    if method == "resources/read" and params["uri"] in (
-        URI,
-        "ui://task-center/panel-v2.html",
-        "ui://task-center/inbox-v3.html",
+    if method == "resources/read" and (
+        params["uri"]
+        in (
+            "ui://task-center/panel.html",
+            "ui://task-center/panel-v2.html",
+            "ui://task-center/inbox-v3.html",
+        )
+        or re.fullmatch(
+            r"ui://task-center/panel-[0-9]+\.[0-9]+\.[0-9]+\.html", params["uri"]
+        )
     ):
         return {
             "contents": [

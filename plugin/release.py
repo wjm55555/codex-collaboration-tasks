@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = "0.7.2"
+VERSION = "0.7.3"
 GITHUB_REPO = "wjm55555/codex-collaboration-tasks"
 RELEASE_ASSET = "collaboration-tasks-macos.zip"
 CHECK_INTERVAL = 3600
@@ -95,11 +95,22 @@ def auto_enabled(root):
     )
 
 
+def installed_version(root):
+    manifest = root / "marketplace/plugin/.codex-plugin/plugin.json"
+    return (
+        json.loads(manifest.read_text())["version"] if manifest.is_file() else VERSION
+    )
+
+
 def update_status(root, *, force=False):
+    local = {
+        "installedVersion": installed_version(root),
+        "autoInstall": auto_enabled(root),
+    }
     cache = root / "github-check.json"
     info = json.loads(cache.read_text()) if cache.is_file() else {"status": "idle"}
     if not GITHUB_REPO:
-        return {"status": "disabled", "autoInstall": auto_enabled(root)}
+        return {"status": "disabled", **local}
     now = int(time.time())
     checking = info["status"] == "checking"
     running = checking and now - info["startedAt"] < 20
@@ -133,11 +144,7 @@ def update_status(root, *, force=False):
             write_json(cache, result)
 
         threading.Thread(target=check, daemon=True).start()
-    return {**info, "autoInstall": auto_enabled(root)}
-
-
-def github_version(root):
-    return update_status(root).get("version")
+    return {**info, **local}
 
 
 def receiver_busy(root):
@@ -152,17 +159,17 @@ def receiver_busy(root):
         )
 
 
-def github_package(root):
-    version = github_version(root)
-    if not version or version_tuple(version) <= version_tuple(VERSION):
-        raise ValueError("GitHub 暂无可下载的新版本")
+def github_package(version):
     url = (
         f"https://github.com/{GITHUB_REPO}/releases/download/v{version}/{RELEASE_ASSET}"
     )
-    with github_open(url, timeout=15) as response:
-        archive = response.read(MAX_PACKAGE + 1)
-    with github_open(url + ".sig", timeout=15) as response:
-        signature = response.read(1024)
+    try:
+        with github_open(url, timeout=15) as response:
+            archive = response.read(MAX_PACKAGE + 1)
+        with github_open(url + ".sig", timeout=15) as response:
+            signature = response.read(1024)
+    except OSError as exc:
+        raise ValueError("未能从 GitHub 下载安装包，请稍后重试") from exc
     if len(archive) > MAX_PACKAGE:
         raise ValueError("升级包大小超出限制")
     return {
@@ -176,8 +183,9 @@ def apply_update(root, response):
     if not isinstance(response, dict):
         raise ValueError("升级包格式无效")  # noqa: TRY004
     version = response.get("version")
-    if version_tuple(version) <= version_tuple(VERSION):
-        raise ValueError("当前已是最新版本")
+    installed = installed_version(root)
+    if version_tuple(version) <= version_tuple(installed):
+        return {"version": installed, "alreadyInstalled": True}
     encoded, signature = response.get("archive"), response.get("signature")
     if (
         not isinstance(encoded, str)

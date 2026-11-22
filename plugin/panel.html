@@ -1281,13 +1281,23 @@
         );
         parent.append(detail);
       }
-      let localVersion = "0.7.2";
-      let lanVersion, githubVersion, offeredUpdate;
+      const panelVersion = "0.7.3";
+      let localVersion = panelVersion;
+      let lanVersion, offeredUpdate;
       let updates = { status: "idle", autoInstall: false };
       let installingUpdate = false, updateResult = "", autoRetryAt = 0;
       const updateBusy = () => data.owner && data.tasks.some(
         (task) => ["queued", "desktop_queued", "running"].includes(task.status),
       );
+
+      function receiveUpdates(status) {
+        if (!status) return;
+        updates = status;
+        if (status.installedVersion && status.installedVersion !== localVersion) {
+          localVersion = status.installedVersion;
+          updateResult = "";
+        }
+      }
 
       function updateOffer() {
         const later = (first, second) => {
@@ -1297,6 +1307,7 @@
           return difference >= 0 && parts[difference] > other[difference];
         };
         const lan = !canReceive && lanVersion && later(lanVersion, localVersion);
+        const githubVersion = updates.version;
         const github = githubVersion && later(githubVersion, localVersion);
         const useGithub = github && (!lan || later(githubVersion, lanVersion));
         offeredUpdate = useGithub ? { source: "github", version: githubVersion }
@@ -1313,7 +1324,8 @@
           : updateResult || (offeredUpdate && updateBusy()
             ? updates.autoInstall ? "有任务正在执行，结束后自动更新" : "有任务正在执行，结束后可更新"
             : offeredUpdate ? "发现新版 " + offeredUpdate.version
-              : updates.status === "ok" ? "已是最新版本"
+              : panelVersion !== localVersion ? "已安装 " + localVersion + "，请重新打开「协作任务」加载新版。"
+                : updates.status === "ok" ? "已是最新版本"
                 : updates.status === "error" ? "未能检查 GitHub 更新，可重试"
                   : updates.status === "disabled" ? "未配置 GitHub 更新来源" : "正在检查更新…");
         $("updateChecked").textContent = "当前版本 " + localVersion + (updates.checkedAt
@@ -1335,7 +1347,8 @@
             updateResult = "有任务正在执行，安装已延后";
           } else {
             localVersion = result.version;
-            updateResult = "已更新到 " + result.version + "，请重新打开面板。";
+            updateResult = (result.alreadyInstalled ? "已安装 " : "已更新到 ") + result.version
+              + (panelVersion === localVersion ? "。" : "，请重新打开「协作任务」加载新版。");
             toast(updateResult);
           }
         } catch (e) {
@@ -1784,8 +1797,7 @@
         if (disposed || n !== refreshSeq) return;
         $("connection").hidden = true;
         syncDelay = v.syncError ? Math.min(syncDelay * 2, 15000) : 1600;
-        updates = v.updates || updates;
-        githubVersion = v.githubVersion;
+        receiveUpdates(v.updates);
         canReceive = v.receiver ?? canReceive;
         peers = v.peers ?? peers;
         const requestsChanged = (v.pendingDevices ?? pendingDevices) !== pendingDevices;
@@ -1844,8 +1856,7 @@
         $("checkUpdates").disabled = true;
         updateResult = "";
         try {
-          updates = await call("check_updates");
-          githubVersion = updates.version;
+          receiveUpdates(await call("check_updates"));
         } catch (e) {
           updateResult = messageFor(e);
         }
@@ -1857,7 +1868,7 @@
         checkbox.disabled = true;
         updateResult = "";
         try {
-          updates = await call("set_auto_update", { enabled: checkbox.checked });
+          receiveUpdates(await call("set_auto_update", { enabled: checkbox.checked }));
         } catch (e) {
           updateResult = messageFor(e);
         }
@@ -2051,7 +2062,7 @@
           if (embedded) {
             const r = await rpc("ui/initialize", {
               protocolVersion: "2026-01-26",
-              appInfo: { name: "协作任务", version: "0.7.2" },
+              appInfo: { name: "协作任务", version: panelVersion },
               appCapabilities: {
                 availableDisplayModes: ["fullscreen", "inline"],
               },
